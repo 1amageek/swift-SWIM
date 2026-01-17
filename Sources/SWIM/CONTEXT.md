@@ -29,7 +29,6 @@ Sources/SWIM/
 │   └── MessageCodec.swift  # Binary encoding/decoding
 │
 ├── Detection/
-│   ├── FailureDetector.swift   # Ping/PingReq/Ack protocol
 │   ├── ProbeTarget.swift       # ProbeResult, PendingProbe
 │   └── SuspicionTimer.swift    # Suspicion timeout management
 │
@@ -144,7 +143,6 @@ for await event in swim.events {
 | `MemberList` | `Mutex<T>` | High-frequency internal access |
 | `Disseminator` | `Mutex<T>` | High-frequency internal access |
 | `SuspicionTimer` | `actor` | Manages async timers |
-| `FailureDetector` | `actor` | Coordinates probe state |
 
 ## Wire Format
 

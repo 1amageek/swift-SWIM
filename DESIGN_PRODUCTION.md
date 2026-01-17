@@ -10,7 +10,7 @@ Production-ready implementation of swift-SWIM with real UDP transport, enhanced 
 swift-SWIM/
 ├── Core/           # Member, MemberStatus, Incarnation, MemberList
 ├── Messages/       # Message, Payload, MessageCodec, MessageBuffer
-├── Detection/      # FailureDetector (deprecated), SuspicionTimer, ProbeTarget
+├── Detection/      # SuspicionTimer, ProbeTarget
 ├── Dissemination/  # Disseminator, BroadcastQueue
 ├── Instance/       # SWIMInstance, SWIMConfiguration, SWIMEvent
 └── Transport/      # SWIMTransport (protocol), MockTransport, LoopbackTransport
