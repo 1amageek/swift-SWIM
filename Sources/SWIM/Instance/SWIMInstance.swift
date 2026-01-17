@@ -53,7 +53,9 @@ public actor SWIMInstance {
     /// Stream of SWIM events.
     ///
     /// Subscribe to this stream to receive membership change notifications.
-    public let events: AsyncStream<SWIMEvent>
+    /// This property is nonisolated since AsyncStream is Sendable and the
+    /// stream is created during initialization and never mutated.
+    public nonisolated let events: AsyncStream<SWIMEvent>
 
     /// Represents a pending probe awaiting ack.
     private struct PendingProbe {
