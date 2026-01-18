@@ -291,4 +291,178 @@ struct MemberListTests {
         let removed = list.remove(id)
         #expect(removed == nil)
     }
+
+    // MARK: - Dead Member GC Tests
+
+    @Test("Remove dead members older than retention period")
+    func removeDeadMembersOlderThanRetention() async throws {
+        let list = MemberList()
+        let member1 = Member(id: MemberID(id: "node1", address: "127.0.0.1:8001"))
+        let member2 = Member(id: MemberID(id: "node2", address: "127.0.0.1:8002"))
+
+        list.update(member1)
+        list.update(member2)
+
+        // Mark as dead
+        list.markDead(member1.id, incarnation: .initial)
+        list.markDead(member2.id, incarnation: .initial)
+
+        #expect(list.count == 2)
+
+        // Wait for retention period
+        try await Task.sleep(for: .milliseconds(50))
+
+        // Remove members older than 30ms
+        let removed = list.removeDeadMembers(olderThan: .milliseconds(30))
+
+        #expect(removed.count == 2)
+        #expect(list.count == 0)
+    }
+
+    @Test("Do not remove recently dead members")
+    func doNotRemoveRecentlyDeadMembers() {
+        let list = MemberList()
+        let member = Member(id: MemberID(id: "node1", address: "127.0.0.1:8001"))
+
+        list.update(member)
+        list.markDead(member.id, incarnation: .initial)
+
+        // Try to remove immediately (retention period not passed)
+        let removed = list.removeDeadMembers(olderThan: .seconds(30))
+
+        #expect(removed.isEmpty)
+        #expect(list.count == 1)
+    }
+
+    @Test("Only remove dead members, not alive or suspect")
+    func onlyRemoveDeadMembers() async throws {
+        let list = MemberList()
+        let alive = Member(id: MemberID(id: "alive", address: "127.0.0.1:8001"))
+        let suspect = Member(id: MemberID(id: "suspect", address: "127.0.0.1:8002"))
+        let dead = Member(id: MemberID(id: "dead", address: "127.0.0.1:8003"))
+
+        list.update(alive)
+        list.update(suspect)
+        list.update(dead)
+
+        list.markSuspect(suspect.id, incarnation: .initial)
+        list.markDead(dead.id, incarnation: .initial)
+
+        try await Task.sleep(for: .milliseconds(50))
+
+        let removed = list.removeDeadMembers(olderThan: .milliseconds(30))
+
+        #expect(removed.count == 1)
+        #expect(removed.contains(dead.id))
+        #expect(list.count == 2)
+        #expect(list.member(for: alive.id) != nil)
+        #expect(list.member(for: suspect.id) != nil)
+    }
+
+    // MARK: - Round-Robin Selection Tests
+
+    @Test("Round-robin covers all members eventually")
+    func roundRobinCoversAllMembers() {
+        let list = MemberList()
+        let members = (1...5).map { i in
+            Member(id: MemberID(id: "node\(i)", address: "127.0.0.1:800\(i)"))
+        }
+
+        for member in members {
+            list.update(member)
+        }
+
+        var probed: Set<MemberID> = []
+
+        // Probe 5 times, should hit all members
+        for _ in 0..<5 {
+            if let target = list.nextRoundRobinTarget(excluding: []) {
+                probed.insert(target.id)
+            }
+        }
+
+        #expect(probed.count == 5, "All 5 members should be probed")
+    }
+
+    @Test("Round-robin wraps around after reaching end")
+    func roundRobinWrapsAround() {
+        let list = MemberList()
+        let member1 = Member(id: MemberID(id: "node1", address: "127.0.0.1:8001"))
+        let member2 = Member(id: MemberID(id: "node2", address: "127.0.0.1:8002"))
+
+        list.update(member1)
+        list.update(member2)
+
+        // Probe 4 times (should wrap around once)
+        var targets: [MemberID] = []
+        for _ in 0..<4 {
+            if let target = list.nextRoundRobinTarget(excluding: []) {
+                targets.append(target.id)
+            }
+        }
+
+        #expect(targets.count == 4)
+        // Each member should appear twice
+        let member1Count = targets.filter { $0 == member1.id }.count
+        let member2Count = targets.filter { $0 == member2.id }.count
+        #expect(member1Count == 2)
+        #expect(member2Count == 2)
+    }
+
+    @Test("Round-robin respects exclusion set")
+    func roundRobinRespectsExclusion() {
+        let list = MemberList()
+        let member1 = Member(id: MemberID(id: "node1", address: "127.0.0.1:8001"))
+        let member2 = Member(id: MemberID(id: "node2", address: "127.0.0.1:8002"))
+        let member3 = Member(id: MemberID(id: "node3", address: "127.0.0.1:8003"))
+
+        list.update(member1)
+        list.update(member2)
+        list.update(member3)
+
+        // Exclude member2
+        var targets: Set<MemberID> = []
+        for _ in 0..<10 {
+            if let target = list.nextRoundRobinTarget(excluding: [member2.id]) {
+                targets.insert(target.id)
+            }
+        }
+
+        #expect(!targets.contains(member2.id), "Excluded member should never be selected")
+        #expect(targets.contains(member1.id))
+        #expect(targets.contains(member3.id))
+    }
+
+    @Test("Round-robin returns nil when no candidates")
+    func roundRobinReturnsNilWhenNoCandidates() {
+        let list = MemberList()
+        let member = Member(id: MemberID(id: "node1", address: "127.0.0.1:8001"))
+
+        list.update(member)
+
+        // Exclude the only member
+        let target = list.nextRoundRobinTarget(excluding: [member.id])
+        #expect(target == nil)
+    }
+
+    @Test("Round-robin skips dead members")
+    func roundRobinSkipsDeadMembers() {
+        let list = MemberList()
+        let alive = Member(id: MemberID(id: "alive", address: "127.0.0.1:8001"))
+        let dead = Member(id: MemberID(id: "dead", address: "127.0.0.1:8002"))
+
+        list.update(alive)
+        list.update(dead)
+        list.markDead(dead.id, incarnation: .initial)
+
+        var targets: Set<MemberID> = []
+        for _ in 0..<5 {
+            if let target = list.nextRoundRobinTarget(excluding: []) {
+                targets.insert(target.id)
+            }
+        }
+
+        #expect(!targets.contains(dead.id), "Dead members should be skipped")
+        #expect(targets.contains(alive.id))
+    }
 }

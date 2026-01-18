@@ -10,96 +10,97 @@ import Synchronization
 /// 1. Status severity (dead > suspect > alive)
 /// 2. Lower dissemination count (newer updates first)
 /// 3. Higher incarnation
+///
+/// Uses a Dictionary-based storage for O(1) push operations.
+/// Sorting is performed on-demand during peek/pop.
 internal struct BroadcastQueue: Sendable {
-    private var updates: [MembershipUpdate]
-    private var memberUpdates: [MemberID: Int]  // memberID -> index in updates
+    /// MemberID -> latest update mapping
+    private var memberUpdates: [MemberID: MembershipUpdate]
 
     /// Creates an empty broadcast queue.
     init() {
-        self.updates = []
         self.memberUpdates = [:]
     }
 
     /// Whether the queue is empty.
     var isEmpty: Bool {
-        updates.isEmpty
+        memberUpdates.isEmpty
     }
 
     /// Number of updates in the queue.
     var count: Int {
-        updates.count
+        memberUpdates.count
     }
 
     /// Pushes an update to the queue.
     ///
     /// If an update for this member already exists, it's replaced
     /// only if the new update has higher priority.
+    ///
+    /// Complexity: O(1)
     mutating func push(_ update: MembershipUpdate) {
-        if let existingIndex = memberUpdates[update.memberID] {
-            let existing = updates[existingIndex]
-
+        if let existing = memberUpdates[update.memberID] {
             // Check if new update should replace existing
             if shouldReplace(existing: existing, with: update) {
-                updates[existingIndex] = update
-                sortQueue()
+                memberUpdates[update.memberID] = update
             }
         } else {
-            updates.append(update)
-            memberUpdates[update.memberID] = updates.count - 1
-            sortQueue()
+            memberUpdates[update.memberID] = update
         }
     }
 
     /// Pops the highest priority update from the queue.
+    ///
+    /// Complexity: O(n log n) due to sorting
     mutating func pop() -> MembershipUpdate? {
-        guard !updates.isEmpty else { return nil }
-
-        let update = updates.removeFirst()
-        memberUpdates.removeValue(forKey: update.memberID)
-
-        // Update indices
-        for (i, u) in updates.enumerated() {
-            memberUpdates[u.memberID] = i
-        }
-
-        return update
+        let updates = peek(count: 1)
+        guard let first = updates.first else { return nil }
+        memberUpdates.removeValue(forKey: first.memberID)
+        return first
     }
 
     /// Peeks at the highest priority updates without removing them.
+    ///
+    /// Complexity: O(n log n) for sorting, O(k) for taking k elements
     func peek(count: Int) -> [MembershipUpdate] {
-        Array(updates.prefix(count))
+        let sorted = memberUpdates.values.sorted { lhs, rhs in
+            // Higher priority first
+            if lhs.status.disseminationPriority != rhs.status.disseminationPriority {
+                return lhs.status.disseminationPriority > rhs.status.disseminationPriority
+            }
+
+            // Lower dissemination count first (newer)
+            if lhs.disseminationCount != rhs.disseminationCount {
+                return lhs.disseminationCount < rhs.disseminationCount
+            }
+
+            // Higher incarnation first
+            return lhs.incarnation > rhs.incarnation
+        }
+        return Array(sorted.prefix(count))
     }
 
     /// Removes an update for the given member.
+    ///
+    /// Complexity: O(1)
     mutating func remove(for memberID: MemberID) {
-        guard let index = memberUpdates[memberID] else { return }
-
-        updates.remove(at: index)
         memberUpdates.removeValue(forKey: memberID)
-
-        // Update indices
-        for (i, u) in updates.enumerated() {
-            memberUpdates[u.memberID] = i
-        }
     }
 
     /// Increments the dissemination count for updates that were sent.
+    ///
+    /// Complexity: O(m) where m is the number of member IDs
     mutating func incrementDisseminationCount(for memberIDs: Set<MemberID>) {
         for id in memberIDs {
-            if let index = memberUpdates[id] {
-                updates[index].disseminationCount += 1
-            }
+            memberUpdates[id]?.disseminationCount += 1
         }
-        sortQueue()
     }
 
     /// Removes updates that have exceeded the dissemination limit.
+    ///
+    /// Complexity: O(n)
     mutating func removeExpired(limit: Int) {
-        updates.removeAll { $0.disseminationCount >= limit }
-        memberUpdates.removeAll()
-        for (i, u) in updates.enumerated() {
-            memberUpdates[u.memberID] = i
-        }
+        memberUpdates = memberUpdates.filter { $0.value.disseminationCount < limit }
     }
 
     // MARK: - Private
@@ -115,28 +116,5 @@ internal struct BroadcastQueue: Sendable {
 
         // Same incarnation: higher severity wins
         return new.status.disseminationPriority > existing.status.disseminationPriority
-    }
-
-    private mutating func sortQueue() {
-        updates.sort { lhs, rhs in
-            // Higher priority first
-            if lhs.status.disseminationPriority != rhs.status.disseminationPriority {
-                return lhs.status.disseminationPriority > rhs.status.disseminationPriority
-            }
-
-            // Lower dissemination count first (newer)
-            if lhs.disseminationCount != rhs.disseminationCount {
-                return lhs.disseminationCount < rhs.disseminationCount
-            }
-
-            // Higher incarnation first
-            return lhs.incarnation > rhs.incarnation
-        }
-
-        // Update indices after sort
-        memberUpdates.removeAll()
-        for (i, u) in updates.enumerated() {
-            memberUpdates[u.memberID] = i
-        }
     }
 }

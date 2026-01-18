@@ -232,8 +232,22 @@ public actor SWIMInstance {
     }
 
     private func runProtocolPeriod() async {
-        // Select a random member to probe
-        guard let target = memberList.randomProbableTarget(excluding: [localMember.id]) else {
+        // Dead member garbage collection
+        let removed = memberList.removeDeadMembers(olderThan: config.deadMemberRetention)
+        for id in removed {
+            eventContinuation.yield(.memberRemoved(id))
+        }
+
+        // Select probe target based on configured strategy
+        let target: Member?
+        switch config.probeSelectionStrategy {
+        case .random:
+            target = memberList.randomProbableTarget(excluding: [localMember.id])
+        case .roundRobin:
+            target = memberList.nextRoundRobinTarget(excluding: [localMember.id])
+        }
+
+        guard let target else {
             return  // No members to probe
         }
 
@@ -485,24 +499,52 @@ public actor SWIMInstance {
             return
         }
 
-        // Wait for ack from target
-        let result = await waitForAck(sequenceNumber: probeSeq, timeout: config.pingTimeout)
+        // Spawn background task to wait for ack (non-blocking)
+        // This allows receiveLoop to continue processing messages
+        let pingTimeout = config.pingTimeout
+        Task { [weak self] in
+            guard let self else { return }
 
+            // Wait for ack from target
+            let result = await self.waitForAck(
+                sequenceNumber: probeSeq,
+                timeout: pingTimeout
+            )
+
+            // Complete the indirect probe
+            await self.completeIndirectProbe(
+                originalSeq: sequenceNumber,
+                probeSeq: probeSeq,
+                target: target,
+                requester: sender,
+                result: result
+            )
+        }
+    }
+
+    /// Completes an indirect probe by sending response to requester.
+    private func completeIndirectProbe(
+        originalSeq: UInt64,
+        probeSeq: UInt64,
+        target: MemberID,
+        requester: MemberID,
+        result: ProbeResult
+    ) async {
         pendingProbes.removeValue(forKey: probeSeq)
 
         if result == .alive {
             // Forward ack back to original requester
             let ackPayload = disseminator.getPayloadForMessage()
             let ack = SWIMMessage.ack(
-                sequenceNumber: sequenceNumber,  // Use original seq for requester
+                sequenceNumber: originalSeq,  // Use original seq for requester
                 target: target,
                 payload: ackPayload
             )
-            try? await transport.send(ack, to: sender)
+            try? await transport.send(ack, to: requester)
         } else {
             // Target didn't respond, send nack
-            let nack = SWIMMessage.nack(sequenceNumber: sequenceNumber, target: target)
-            try? await transport.send(nack, to: sender)
+            let nack = SWIMMessage.nack(sequenceNumber: originalSeq, target: target)
+            try? await transport.send(nack, to: requester)
         }
     }
 

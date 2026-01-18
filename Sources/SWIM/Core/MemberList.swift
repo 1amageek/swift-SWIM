@@ -20,12 +20,18 @@ public final class MemberList: Sendable {
         var aliveMembers: Set<MemberID>
         var suspectMembers: Set<MemberID>
         var deadMembers: Set<MemberID>
+        /// Timestamps when members were marked dead (for GC)
+        var deadTimestamps: [MemberID: ContinuousClock.Instant]
+        /// Index for round-robin selection
+        var probeIndex: Int
 
         init() {
             self.members = [:]
             self.aliveMembers = []
             self.suspectMembers = []
             self.deadMembers = []
+            self.deadTimestamps = [:]
+            self.probeIndex = 0
         }
     }
 
@@ -148,6 +154,55 @@ public final class MemberList: Sendable {
         }
     }
 
+    /// Returns the next probe target using round-robin selection.
+    ///
+    /// This ensures all members are probed eventually, providing
+    /// more consistent failure detection across the cluster.
+    ///
+    /// - Parameter excluding: Set of member IDs to exclude from selection
+    /// - Returns: A member to probe, or nil if none available
+    public func nextRoundRobinTarget(excluding: Set<MemberID> = []) -> Member? {
+        state.withLock { state in
+            let candidates = Array(state.aliveMembers
+                .union(state.suspectMembers)
+                .subtracting(excluding))
+            guard !candidates.isEmpty else { return nil }
+
+            // Reset index if it exceeds array bounds
+            state.probeIndex = state.probeIndex % candidates.count
+            let id = candidates[state.probeIndex]
+            state.probeIndex += 1
+
+            return state.members[id]
+        }
+    }
+
+    /// Removes dead members older than the specified retention period.
+    ///
+    /// Dead members are kept for a period to allow gossip propagation.
+    /// After the retention period, they are removed from memory.
+    ///
+    /// - Parameter retention: Duration after which dead members are removed
+    /// - Returns: IDs of removed members
+    @discardableResult
+    public func removeDeadMembers(olderThan retention: Duration) -> [MemberID] {
+        state.withLock { state in
+            let now = ContinuousClock.now
+            var removed: [MemberID] = []
+
+            for (id, timestamp) in state.deadTimestamps {
+                if now - timestamp > retention {
+                    state.members.removeValue(forKey: id)
+                    state.deadMembers.remove(id)
+                    state.deadTimestamps.removeValue(forKey: id)
+                    removed.append(id)
+                }
+            }
+
+            return removed
+        }
+    }
+
     // MARK: - Mutation Operations
 
     /// Updates a member in the list.
@@ -172,6 +227,15 @@ public final class MemberList: Sendable {
                 state.members[member.id] = member
                 Self.updateStatusSets(&state, for: member, previousStatus: previousStatus)
 
+                // Track dead timestamp for GC (learned via gossip)
+                if member.status == .dead && previousStatus != .dead {
+                    state.deadTimestamps[member.id] = .now
+                }
+                // Clear dead timestamp if member recovered
+                if member.status != .dead && previousStatus == .dead {
+                    state.deadTimestamps.removeValue(forKey: member.id)
+                }
+
                 if previousStatus != member.status {
                     return .statusChanged(member, from: previousStatus)
                 }
@@ -180,6 +244,10 @@ public final class MemberList: Sendable {
                 // New member
                 state.members[member.id] = member
                 Self.updateStatusSets(&state, for: member)
+                // Track dead timestamp for new dead members (learned via gossip)
+                if member.status == .dead {
+                    state.deadTimestamps[member.id] = .now
+                }
                 return .joined(member)
             }
         }
@@ -198,6 +266,7 @@ public final class MemberList: Sendable {
             state.aliveMembers.remove(id)
             state.suspectMembers.remove(id)
             state.deadMembers.remove(id)
+            state.deadTimestamps.removeValue(forKey: id)
             return member
         }
     }
@@ -237,6 +306,9 @@ public final class MemberList: Sendable {
             state.members[id] = member
             Self.updateStatusSets(&state, for: member, previousStatus: previousStatus)
 
+            // Record timestamp for GC
+            state.deadTimestamps[id] = .now
+
             return .statusChanged(member, from: previousStatus)
         }
     }
@@ -257,6 +329,11 @@ public final class MemberList: Sendable {
             member.incarnation = incarnation
             state.members[id] = member
             Self.updateStatusSets(&state, for: member, previousStatus: previousStatus)
+
+            // Clear dead timestamp if recovering from dead status
+            if previousStatus == .dead {
+                state.deadTimestamps.removeValue(forKey: id)
+            }
 
             if previousStatus != .alive {
                 return .statusChanged(member, from: previousStatus)

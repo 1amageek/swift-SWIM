@@ -1,8 +1,6 @@
-/// SWIM Probe Target Selection
+/// SWIM Probe Result
 ///
-/// Utilities for selecting random members to probe.
-
-import Foundation
+/// Result types for probe operations.
 
 /// Result of a probe operation.
 public enum ProbeResult: Sendable {
@@ -20,33 +18,4 @@ public enum ProbeResult: Sendable {
 
     /// Probe timed out completely.
     case timeout
-}
-
-/// Information about a pending probe.
-internal struct PendingProbe: Sendable {
-    /// The member being probed.
-    let target: Member
-
-    /// When the probe started.
-    let startTime: ContinuousClock.Instant
-
-    /// Continuation to resume when ack is received.
-    let continuation: CheckedContinuation<ProbeResult, Never>?
-
-    /// Whether indirect probes have been sent.
-    var indirectProbesSent: Bool
-
-    /// Members used for indirect probes.
-    var indirectProbers: [MemberID]
-
-    init(
-        target: Member,
-        continuation: CheckedContinuation<ProbeResult, Never>? = nil
-    ) {
-        self.target = target
-        self.startTime = .now
-        self.continuation = continuation
-        self.indirectProbesSent = false
-        self.indirectProbers = []
-    }
 }

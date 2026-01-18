@@ -4,6 +4,15 @@
 
 import Foundation
 
+/// Strategy for selecting probe targets.
+public enum ProbeSelectionStrategy: Sendable {
+    /// Random selection - simple but may miss some members.
+    case random
+
+    /// Round-robin selection - guarantees all members are probed eventually.
+    case roundRobin
+}
+
 /// SWIM instance configuration.
 ///
 /// These parameters control the behavior of the failure detection
@@ -59,6 +68,22 @@ public struct SWIMConfiguration: Sendable {
     /// Default: 3
     public var baseDisseminationLimit: Int
 
+    /// Dead member retention period before removal from member list.
+    ///
+    /// Dead members are kept for this duration to allow gossip propagation.
+    /// After this period, they are removed from memory.
+    ///
+    /// Default: 30 seconds
+    public var deadMemberRetention: Duration
+
+    /// Strategy for selecting probe targets.
+    ///
+    /// - `random`: Simple random selection (may miss some members)
+    /// - `roundRobin`: Guarantees all members are probed eventually
+    ///
+    /// Default: `.roundRobin`
+    public var probeSelectionStrategy: ProbeSelectionStrategy
+
     /// Creates a new configuration with the given values.
     public init(
         protocolPeriod: Duration = .milliseconds(200),
@@ -66,7 +91,9 @@ public struct SWIMConfiguration: Sendable {
         indirectProbeCount: Int = 3,
         suspicionMultiplier: Double = 5.0,
         maxPayloadSize: Int = 10,
-        baseDisseminationLimit: Int = 3
+        baseDisseminationLimit: Int = 3,
+        deadMemberRetention: Duration = .seconds(30),
+        probeSelectionStrategy: ProbeSelectionStrategy = .roundRobin
     ) {
         self.protocolPeriod = protocolPeriod
         self.pingTimeout = pingTimeout
@@ -74,6 +101,8 @@ public struct SWIMConfiguration: Sendable {
         self.suspicionMultiplier = suspicionMultiplier
         self.maxPayloadSize = maxPayloadSize
         self.baseDisseminationLimit = baseDisseminationLimit
+        self.deadMemberRetention = deadMemberRetention
+        self.probeSelectionStrategy = probeSelectionStrategy
     }
 
     /// Default configuration suitable for most use cases.
@@ -88,7 +117,9 @@ public struct SWIMConfiguration: Sendable {
         indirectProbeCount: 3,
         suspicionMultiplier: 3.0,
         maxPayloadSize: 10,
-        baseDisseminationLimit: 3
+        baseDisseminationLimit: 3,
+        deadMemberRetention: .seconds(15),
+        probeSelectionStrategy: .roundRobin
     )
 
     /// Slow configuration for high-latency or unreliable networks.
@@ -100,7 +131,9 @@ public struct SWIMConfiguration: Sendable {
         indirectProbeCount: 5,
         suspicionMultiplier: 8.0,
         maxPayloadSize: 15,
-        baseDisseminationLimit: 4
+        baseDisseminationLimit: 4,
+        deadMemberRetention: .seconds(60),
+        probeSelectionStrategy: .roundRobin
     )
 
     /// Development configuration for local testing.
@@ -112,7 +145,9 @@ public struct SWIMConfiguration: Sendable {
         indirectProbeCount: 2,
         suspicionMultiplier: 2.0,
         maxPayloadSize: 5,
-        baseDisseminationLimit: 2
+        baseDisseminationLimit: 2,
+        deadMemberRetention: .seconds(5),
+        probeSelectionStrategy: .roundRobin
     )
 
     // MARK: - Computed Properties

@@ -27,6 +27,11 @@ public enum SWIMEvent: Sendable {
     /// A member left the cluster gracefully.
     case memberLeft(MemberID)
 
+    /// A dead member was removed from the member list after retention period.
+    ///
+    /// This is purely a cleanup event - the member was already marked dead earlier.
+    case memberRemoved(MemberID)
+
     /// The local member's incarnation was incremented.
     ///
     /// This happens when refuting a suspicion about ourselves.
@@ -49,6 +54,8 @@ extension SWIMEvent: CustomStringConvertible {
             return "MemberRecovered(\(member.id))"
         case .memberLeft(let id):
             return "MemberLeft(\(id))"
+        case .memberRemoved(let id):
+            return "MemberRemoved(\(id))"
         case .incarnationIncremented(let inc):
             return "IncarnationIncremented(\(inc))"
         case .error(let error):

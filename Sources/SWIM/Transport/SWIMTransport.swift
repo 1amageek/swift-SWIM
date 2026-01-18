@@ -129,6 +129,7 @@ public final class LoopbackTransport: SWIMTransport, Sendable {
 
     private struct LoopbackState: Sendable {
         var peers: [String: LoopbackTransport] = [:]
+        var localMemberID: MemberID?
     }
 
     /// Creates a loopback transport.
@@ -143,14 +144,28 @@ public final class LoopbackTransport: SWIMTransport, Sendable {
         self.continuation = cont
     }
 
+    /// Sets the local member ID for this transport.
+    ///
+    /// When set, this ID will be used as the sender identity
+    /// instead of generating one from the local address.
+    ///
+    /// - Parameter memberID: The member ID to use as sender
+    public func setLocalMemberID(_ memberID: MemberID) {
+        state.withLock { $0.localMemberID = memberID }
+    }
+
     public func send(_ message: SWIMMessage, to member: MemberID) async throws {
-        let peer = state.withLock { $0.peers[member.address] }
+        let (peer, senderID) = state.withLock { state -> (LoopbackTransport?, MemberID) in
+            let peer = state.peers[member.address]
+            // Use configured MemberID if set, otherwise generate from address
+            let id = state.localMemberID ?? MemberID(id: localAddress, address: localAddress)
+            return (peer, id)
+        }
 
         guard let peer else {
             throw SWIMError.transportError("No peer at \(member.address)")
         }
 
-        let senderID = MemberID(id: localAddress, address: localAddress)
         peer.receive(message, from: senderID)
     }
 
