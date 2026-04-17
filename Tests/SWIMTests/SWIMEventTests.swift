@@ -41,7 +41,7 @@ struct SWIMEventTests {
         // Wait for processing
         try await Task.sleep(for: .milliseconds(100))
 
-        await instance.stop()
+        try await instance.shutdown()
 
         let events = await eventTask.value
         let joinedEvent = events.first { event in
@@ -87,7 +87,7 @@ struct SWIMEventTests {
         // Wait for processing
         try await Task.sleep(for: .milliseconds(100))
 
-        await instance.stop()
+        try await instance.shutdown()
 
         let events = await eventTask.value
         let joinedEvent = events.first { event in
@@ -140,7 +140,7 @@ struct SWIMEventTests {
         // Wait for processing
         try await Task.sleep(for: .milliseconds(100))
 
-        await instance.stop()
+        try await instance.shutdown()
 
         let events = await eventTask.value
         let suspectedEvent = events.first { event in
@@ -193,7 +193,7 @@ struct SWIMEventTests {
         // Wait for processing
         try await Task.sleep(for: .milliseconds(100))
 
-        await instance.stop()
+        try await instance.shutdown()
 
         let events = await eventTask.value
         let failedEvent = events.first { event in
@@ -244,7 +244,7 @@ struct SWIMEventTests {
         // Wait for processing
         try await Task.sleep(for: .milliseconds(100))
 
-        await instance.stop()
+        try await instance.shutdown()
 
         let events = await eventTask.value
         let recoveredEvent = events.first { event in
@@ -291,7 +291,7 @@ struct SWIMEventTests {
         // Wait for processing
         try await Task.sleep(for: .milliseconds(100))
 
-        await instance.stop()
+        try await instance.shutdown()
 
         let events = await eventTask.value
         let incrementedEvent = events.first { event in
@@ -327,7 +327,7 @@ struct SWIMEventTests {
         }
 
         // Graceful leave
-        await instance.leave()
+        try await instance.leave()
 
         let events = await eventTask.value
         let leftEvent = events.first { event in

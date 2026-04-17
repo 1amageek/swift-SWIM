@@ -7,8 +7,37 @@ import Testing
 @Suite("SWIMInstance Tests")
 struct SWIMInstanceTests {
 
+    private final class PingRequestFailingTransport: SWIMTransport, Sendable {
+        let localAddress: String
+        let incomingMessages: AsyncStream<(SWIMMessage, MemberID)>
+
+        private let continuation: AsyncStream<(SWIMMessage, MemberID)>.Continuation
+
+        init(localAddress: String) {
+            self.localAddress = localAddress
+
+            var continuation: AsyncStream<(SWIMMessage, MemberID)>.Continuation!
+            self.incomingMessages = AsyncStream { continuation = $0 }
+            self.continuation = continuation
+        }
+
+        func send(_ message: SWIMMessage, to member: MemberID) async throws {
+            if case .pingRequest = message {
+                throw SWIMError.transportError("forced pingRequest dispatch failure")
+            }
+        }
+
+        func receive(_ message: SWIMMessage, from sender: MemberID) {
+            continuation.yield((message, sender))
+        }
+
+        func finish() {
+            continuation.finish()
+        }
+    }
+
     @Test("Create instance")
-    func createInstance() async {
+    func createInstance() async throws {
         let transport = MockTransport(localAddress: "127.0.0.1:8000")
         let localMember = Member(id: MemberID(id: "node1", address: "127.0.0.1:8000"))
 
@@ -22,8 +51,8 @@ struct SWIMInstanceTests {
         #expect(local.id == localMember.id)
     }
 
-    @Test("Start and stop")
-    func startStop() async {
+    @Test("Start and shutdown")
+    func startShutdown() async throws {
         let transport = MockTransport(localAddress: "127.0.0.1:8000")
         let localMember = Member(id: MemberID(id: "node1", address: "127.0.0.1:8000"))
 
@@ -36,9 +65,13 @@ struct SWIMInstanceTests {
         await instance.start()
 
         // Give it a moment to start
-        try? await Task.sleep(for: .milliseconds(50))
+        do {
+            try await Task.sleep(for: .milliseconds(50))
+        } catch {
+            Issue.record("Sleep interrupted before shutdown")
+        }
 
-        await instance.stop()
+        try await instance.shutdown()
     }
 
     @Test("Join sends ping to seeds")
@@ -67,11 +100,11 @@ struct SWIMInstanceTests {
             Issue.record("Expected ping message")
         }
 
-        await instance.stop()
+        try await instance.shutdown()
     }
 
     @Test("Join with empty seeds throws error")
-    func joinEmptySeeds() async {
+    func joinEmptySeeds() async throws {
         let transport = MockTransport(localAddress: "127.0.0.1:8000")
         let localMember = Member(id: MemberID(id: "node1", address: "127.0.0.1:8000"))
 
@@ -90,11 +123,11 @@ struct SWIMInstanceTests {
             // Expected
         }
 
-        await instance.stop()
+        try await instance.shutdown()
     }
 
     @Test("Members list")
-    func membersList() async {
+    func membersList() async throws {
         let transport = MockTransport(localAddress: "127.0.0.1:8000")
         let localMember = Member(id: MemberID(id: "node1", address: "127.0.0.1:8000"))
 
@@ -110,7 +143,7 @@ struct SWIMInstanceTests {
     }
 
     @Test("Alive count")
-    func aliveCount() async {
+    func aliveCount() async throws {
         let transport = MockTransport(localAddress: "127.0.0.1:8000")
         let localMember = Member(id: MemberID(id: "node1", address: "127.0.0.1:8000"))
 
@@ -122,6 +155,48 @@ struct SWIMInstanceTests {
 
         let count = await instance.aliveCount
         #expect(count == 1)
+    }
+
+    @Test("Indirect dispatch failure does not mark peer suspect", .timeLimit(.minutes(1)))
+    func indirectDispatchFailureDoesNotMarkPeerSuspect() async throws {
+        var config = SWIMConfiguration.development
+        config.protocolPeriod = .milliseconds(20)
+        config.pingTimeout = .milliseconds(10)
+        config.probeSelectionStrategy = .roundRobin
+        config.indirectProbeCount = 1
+
+        let transport = PingRequestFailingTransport(localAddress: "127.0.0.1:8000")
+        let localMember = Member(id: MemberID(id: "node1", address: "127.0.0.1:8000"))
+
+        let instance = SWIMInstance(
+            localMember: localMember,
+            config: config,
+            transport: transport
+        )
+
+        await instance.start()
+
+        let targetA = Member(id: MemberID(id: "node2", address: "127.0.0.1:8001"))
+        let targetB = Member(id: MemberID(id: "node3", address: "127.0.0.1:8002"))
+        let introducer = MemberID(id: "node4", address: "127.0.0.1:8003")
+        let bootstrap = SWIMMessage.ping(
+            sequenceNumber: 1,
+            payload: GossipPayload(updates: [
+                MembershipUpdate(member: targetA),
+                MembershipUpdate(member: targetB),
+            ])
+        )
+        transport.receive(bootstrap, from: introducer)
+
+        try await Task.sleep(for: .milliseconds(120))
+
+        let members = await instance.members
+        let remoteMembers = members.filter { $0.id == targetA.id || $0.id == targetB.id }
+        #expect(remoteMembers.count == 2)
+        #expect(remoteMembers.allSatisfy { $0.status == .alive }, "Indirect dispatch failure must not mark peers suspect")
+
+        try await instance.shutdown()
+        transport.finish()
     }
 }
 
@@ -155,7 +230,7 @@ struct MockTransportTests {
     }
 
     @Test("Receive message")
-    func receiveMessage() async {
+    func receiveMessage() async throws {
         let transport = MockTransport(localAddress: "127.0.0.1:8000")
         let sender = MemberID(id: "sender", address: "127.0.0.1:9000")
         let message = SWIMMessage.ping(sequenceNumber: 1, payload: .empty)
@@ -224,7 +299,7 @@ struct LoopbackTransportTests {
     }
 
     @Test("Send to disconnected peer throws error")
-    func sendToDisconnectedPeer() async {
+    func sendToDisconnectedPeer() async throws {
         let transport = LoopbackTransport(localAddress: "127.0.0.1:8000")
         let target = MemberID(id: "unknown", address: "127.0.0.1:9999")
         let message = SWIMMessage.ping(sequenceNumber: 1, payload: .empty)
@@ -238,7 +313,7 @@ struct LoopbackTransportTests {
     }
 
     @Test("Disconnect from peer")
-    func disconnectFromPeer() async {
+    func disconnectFromPeer() async throws {
         let transport1 = LoopbackTransport(localAddress: "127.0.0.1:8000")
         let transport2 = LoopbackTransport(localAddress: "127.0.0.1:8001")
 
@@ -248,7 +323,11 @@ struct LoopbackTransportTests {
         let message = SWIMMessage.ping(sequenceNumber: 1, payload: .empty)
 
         // Should work
-        try? await transport1.send(message, to: target)
+        do {
+            try await transport1.send(message, to: target)
+        } catch {
+            Issue.record("Expected send to succeed before disconnect")
+        }
 
         // Disconnect
         transport1.disconnect(from: "127.0.0.1:8001")

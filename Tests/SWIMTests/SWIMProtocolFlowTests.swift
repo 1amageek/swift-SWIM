@@ -47,7 +47,7 @@ struct SWIMProtocolFlowTests {
         }
         #expect(ackSent, "Expected ack to be sent for ping")
 
-        await instance.stop()
+        try await instance.shutdown()
     }
 
     @Test("Direct ping adds sender to member list", .timeLimit(.minutes(1)))
@@ -82,7 +82,7 @@ struct SWIMProtocolFlowTests {
         let hasRemoteMember = members.contains { $0.id == remoteMember }
         #expect(hasRemoteMember, "Remote member should be added to member list")
 
-        await instance.stop()
+        try await instance.shutdown()
     }
 
     // MARK: - Indirect Probe Flow
@@ -120,7 +120,7 @@ struct SWIMProtocolFlowTests {
         }
         #expect(pingSentToTarget, "Should send ping to the target on behalf of requester")
 
-        await instance.stop()
+        try await instance.shutdown()
     }
 
     @Test("PingRequest sends correct response type", .timeLimit(.minutes(1)))
@@ -170,7 +170,7 @@ struct SWIMProtocolFlowTests {
         }
         #expect(responseSent, "Should send ack or nack to requester")
 
-        await instance.stop()
+        try await instance.shutdown()
     }
 
     @Test("PingRequest sends nack when target unreachable", .timeLimit(.minutes(1)))
@@ -210,7 +210,7 @@ struct SWIMProtocolFlowTests {
         }
         #expect(nackSent, "Nack should be sent when target doesn't respond")
 
-        await instance.stop()
+        try await instance.shutdown()
     }
 
     // MARK: - Suspicion Flow
@@ -269,7 +269,7 @@ struct SWIMProtocolFlowTests {
         let recovered = members.first { $0.id == remoteMember }
         #expect(recovered?.status == .alive, "Member should recover to alive after ack")
 
-        await instance.stop()
+        try await instance.shutdown()
     }
 
     // MARK: - Suspicion Timeout
@@ -343,8 +343,8 @@ struct SWIMProtocolFlowTests {
         let node2State = members.first { $0.id == member2.id }
 
         // Cleanup
-        await node1.stop()
-        await node2.stop()
+        try await node1.shutdown()
+        try await node2.shutdown()
         eventTask.cancel()
         transport1.finish()
         transport2.finish()
@@ -412,6 +412,6 @@ struct SWIMProtocolFlowTests {
             #expect(payload.updates.count >= 0, "Ack payload should exist (may be empty if fully disseminated)")
         }
 
-        await instance.stop()
+        try await instance.shutdown()
     }
 }

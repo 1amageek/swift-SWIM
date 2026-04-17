@@ -22,7 +22,7 @@ let package = Package(
         ),
     ],
     dependencies: [
-        .package(url: "https://github.com/1amageek/swift-nio-udp.git", from: "1.0.0"),
+        .package(path: "../swift-nio-udp"),
     ],
     targets: [
         // Core SWIM library (no external dependencies)

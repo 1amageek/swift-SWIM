@@ -25,8 +25,8 @@ struct SWIMTransportUDPTests {
 
     // MARK: - Lifecycle Tests
 
-    @Test("Start and stop transport")
-    func startAndStopTransport() async throws {
+    @Test("Start and shutdown transport")
+    func startAndShutdownTransport() async throws {
         let transport = SWIMUDPTransport(host: "127.0.0.1", port: 0)
 
         try await transport.start()
@@ -35,7 +35,7 @@ struct SWIMTransportUDPTests {
         let address = transport.localAddress
         #expect(!address.contains(":0"))
 
-        await transport.stop()
+        try await transport.shutdown()
     }
 
     @Test("Local address updates after start")
@@ -53,7 +53,7 @@ struct SWIMTransportUDPTests {
         #expect(afterAddress != "127.0.0.1:0")
         #expect(afterAddress.hasPrefix("127.0.0.1:"))
 
-        await transport.stop()
+        try await transport.shutdown()
     }
 
     // MARK: - Send/Receive Tests
@@ -110,8 +110,8 @@ struct SWIMTransportUDPTests {
             Issue.record("Expected ping message")
         }
 
-        await transport1.stop()
-        await transport2.stop()
+        try await transport1.shutdown()
+        try await transport2.shutdown()
     }
 
     @Test("Send and receive ack message with payload")
@@ -171,8 +171,8 @@ struct SWIMTransportUDPTests {
             Issue.record("Expected ack message")
         }
 
-        await transport1.stop()
-        await transport2.stop()
+        try await transport1.shutdown()
+        try await transport2.shutdown()
     }
 
     @Test("Send and receive pingRequest message")
@@ -225,14 +225,14 @@ struct SWIMTransportUDPTests {
             Issue.record("Expected pingRequest message")
         }
 
-        await transport1.stop()
-        await transport2.stop()
+        try await transport1.shutdown()
+        try await transport2.shutdown()
     }
 
     // MARK: - Error Handling Tests
 
     @Test("Send before start throws error")
-    func sendBeforeStartThrows() async {
+    func sendBeforeStartThrows() async throws {
         let transport = SWIMUDPTransport(host: "127.0.0.1", port: 0)
 
         let message = SWIMMessage.ping(sequenceNumber: 1, payload: .empty)
@@ -255,7 +255,7 @@ struct SWIMTransportUDPTests {
             try await transport.send(message, to: target)
         }
 
-        await transport.stop()
+        try await transport.shutdown()
     }
 
     @Test("Double start throws error")
@@ -269,15 +269,15 @@ struct SWIMTransportUDPTests {
             try await transport.start()
         }
 
-        await transport.stop()
+        try await transport.shutdown()
     }
 
-    @Test("Restart after stop throws error")
-    func restartAfterStopThrows() async throws {
+    @Test("Restart after shutdown throws error")
+    func restartAfterShutdownThrows() async throws {
         let transport = SWIMUDPTransport(host: "127.0.0.1", port: 0)
 
         try await transport.start()
-        await transport.stop()
+        try await transport.shutdown()
 
         // Start after stop should throw (single-use)
         await #expect(throws: SWIMError.self) {
@@ -285,12 +285,12 @@ struct SWIMTransportUDPTests {
         }
     }
 
-    @Test("Send after stop throws error")
-    func sendAfterStopThrows() async throws {
+    @Test("Send after shutdown throws error")
+    func sendAfterShutdownThrows() async throws {
         let transport = SWIMUDPTransport(host: "127.0.0.1", port: 0)
 
         try await transport.start()
-        await transport.stop()
+        try await transport.shutdown()
 
         let message = SWIMMessage.ping(sequenceNumber: 1, payload: .empty)
         let target = MemberID(id: "node", address: "127.0.0.1:8000")
@@ -346,7 +346,7 @@ struct SWIMTransportUDPTests {
         let count = receivedCount.withLock { $0 }
         #expect(count == 5)
 
-        await transport1.stop()
-        await transport2.stop()
+        try await transport1.shutdown()
+        try await transport2.shutdown()
     }
 }

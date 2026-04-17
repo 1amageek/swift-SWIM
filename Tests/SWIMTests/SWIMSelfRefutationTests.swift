@@ -46,7 +46,7 @@ struct SWIMSelfRefutationTests {
         // Wait for processing
         try await Task.sleep(for: .milliseconds(100))
 
-        await instance.stop()
+        try await instance.shutdown()
 
         // Check incarnation was incremented
         let events = await eventTask.value
@@ -94,7 +94,7 @@ struct SWIMSelfRefutationTests {
         // Wait for processing
         try await Task.sleep(for: .milliseconds(100))
 
-        await instance.stop()
+        try await instance.shutdown()
 
         // Check incarnation was incremented
         let events = await eventTask.value
@@ -141,7 +141,7 @@ struct SWIMSelfRefutationTests {
         #expect(updatedLocal.incarnation.value > 1, "Local incarnation should be incremented after refutation")
         #expect(updatedLocal.status == .alive, "Local status should remain alive")
 
-        await instance.stop()
+        try await instance.shutdown()
     }
 
     @Test("Ignores old incarnation suspect accusation", .timeLimit(.minutes(1)))
@@ -179,7 +179,7 @@ struct SWIMSelfRefutationTests {
         // Wait a bit
         try await Task.sleep(for: .milliseconds(100))
 
-        await instance.stop()
+        try await instance.shutdown()
         eventTask.cancel()
 
         // Should NOT have incremented incarnation
@@ -223,7 +223,7 @@ struct SWIMSelfRefutationTests {
         // Wait a bit
         try await Task.sleep(for: .milliseconds(100))
 
-        await instance.stop()
+        try await instance.shutdown()
         eventTask.cancel()
 
         // Should NOT have incremented incarnation

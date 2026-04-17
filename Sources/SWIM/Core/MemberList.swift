@@ -163,9 +163,11 @@ public final class MemberList: Sendable {
     /// - Returns: A member to probe, or nil if none available
     public func nextRoundRobinTarget(excluding: Set<MemberID> = []) -> Member? {
         state.withLock { state in
-            let candidates = Array(state.aliveMembers
-                .union(state.suspectMembers)
-                .subtracting(excluding))
+            let candidates = Self.sortedMemberIDs(
+                state.aliveMembers
+                    .union(state.suspectMembers)
+                    .subtracting(excluding)
+            )
             guard !candidates.isEmpty else { return nil }
 
             // Reset index if it exceeds array bounds
@@ -355,6 +357,15 @@ public final class MemberList: Sendable {
 
         // Same incarnation: higher severity wins
         return update.status > existing.status
+    }
+
+    private static func sortedMemberIDs<S: Sequence>(_ ids: S) -> [MemberID] where S.Element == MemberID {
+        Array(ids).sorted { lhs, rhs in
+            if lhs.id != rhs.id {
+                return lhs.id < rhs.id
+            }
+            return lhs.address < rhs.address
+        }
     }
 
     private static func updateStatusSets(

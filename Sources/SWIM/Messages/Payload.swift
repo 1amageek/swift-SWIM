@@ -80,7 +80,7 @@ public struct MembershipUpdate: Sendable, Hashable {
         guard let memberID = MemberID.decode(from: buffer, at: &offset) else { return nil }
 
         guard buffer.hasBytes(1, at: offset) else { return nil }
-        let status = MemberStatus.decode(from: buffer, at: offset) ?? .alive
+        guard let status = MemberStatus.decode(from: buffer, at: offset) else { return nil }
         offset += 1
 
         guard buffer.hasBytes(8, at: offset) else { return nil }

@@ -10,6 +10,9 @@ public enum ProbeResult: Sendable {
     /// Target didn't respond directly but was reached indirectly.
     case aliveIndirect
 
+    /// Local transport failed before any probe could be dispatched.
+    case transportFailure
+
     /// Target didn't respond, marked as suspect.
     case suspect
 

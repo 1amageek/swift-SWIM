@@ -384,6 +384,26 @@ struct MemberListTests {
         #expect(probed.count == 5, "All 5 members should be probed")
     }
 
+    @Test("Round-robin uses stable member ordering")
+    func roundRobinUsesStableOrdering() {
+        let list = MemberList()
+        let members = [
+            Member(id: MemberID(id: "node3", address: "127.0.0.1:8003")),
+            Member(id: MemberID(id: "node1", address: "127.0.0.1:8001")),
+            Member(id: MemberID(id: "node2", address: "127.0.0.1:8002")),
+        ]
+
+        for member in members {
+            list.update(member)
+        }
+
+        let targets = (0..<3).compactMap { _ in
+            list.nextRoundRobinTarget(excluding: [])?.id.id
+        }
+
+        #expect(targets == ["node1", "node2", "node3"])
+    }
+
     @Test("Round-robin wraps around after reaching end")
     func roundRobinWrapsAround() {
         let list = MemberList()

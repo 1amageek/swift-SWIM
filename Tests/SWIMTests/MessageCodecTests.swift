@@ -291,4 +291,28 @@ struct MessageCodecTests {
             _ = try SWIMMessageCodec.decode(data)
         }
     }
+
+    @Test("Decode invalid membership status throws error")
+    func decodeInvalidMembershipStatus() throws {
+        let update = MembershipUpdate(
+            member: Member(
+                id: MemberID(id: "node1", address: "127.0.0.1:8000"),
+                status: .alive,
+                incarnation: Incarnation(value: 1)
+            )
+        )
+        let original = SWIMMessage.ping(
+            sequenceNumber: 1,
+            payload: GossipPayload(updates: [update])
+        )
+
+        var data = SWIMMessageCodec.encode(original)
+        let memberIDLength = 2 + "node1".utf8.count + 2 + "127.0.0.1:8000".utf8.count
+        let statusOffset = 1 + 8 + 2 + memberIDLength
+        data[statusOffset] = 0xFF
+
+        #expect(throws: SWIMCodecError.self) {
+            _ = try SWIMMessageCodec.decode(data)
+        }
+    }
 }

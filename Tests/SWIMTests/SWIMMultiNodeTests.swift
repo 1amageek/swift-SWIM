@@ -64,8 +64,8 @@ struct SWIMMultiNodeTests {
         #expect(node2Members.count >= 2, "Node2 should have at least 2 members (self + node1)")
 
         // Cleanup
-        await node1.stop()
-        await node2.stop()
+        try await node1.shutdown()
+        try await node2.shutdown()
         transport1.finish()
         transport2.finish()
     }
@@ -137,9 +137,9 @@ struct SWIMMultiNodeTests {
         #expect(node3Members.count >= 2, "Node3 should know at least 2 members")
 
         // Cleanup
-        await node1.stop()
-        await node2.stop()
-        await node3.stop()
+        try await node1.shutdown()
+        try await node2.shutdown()
+        try await node3.shutdown()
         transport1.finish()
         transport2.finish()
         transport3.finish()
@@ -200,9 +200,9 @@ struct SWIMMultiNodeTests {
         #expect(hasNode3, "Node1 should know about Node3")
 
         // Cleanup
-        await node1.stop()
-        await node2.stop()
-        await node3.stop()
+        try await node1.shutdown()
+        try await node2.shutdown()
+        try await node3.shutdown()
         transport1.finish()
         transport2.finish()
         transport3.finish()
@@ -259,7 +259,7 @@ struct SWIMMultiNodeTests {
         }
         #expect(responseToNode1, "Node3 should send response (ack or nack) to Node1")
 
-        await node3.stop()
+        try await node3.shutdown()
     }
 
     @Test("Graceful leave broadcasts departure", .timeLimit(.minutes(1)))
@@ -290,7 +290,7 @@ struct SWIMMultiNodeTests {
         transport.clearSentMessages()
 
         // Leave gracefully
-        await instance.leave()
+        try await instance.leave()
 
         // Check that departure messages were sent
         let sentMessages = transport.getSentMessages()
@@ -367,6 +367,6 @@ struct SWIMMultiNodeTests {
         node2 = members.first { $0.id == remoteMember }
         #expect(node2?.status == .dead, "Member should be dead after gossip")
 
-        await instance.stop()
+        try await instance.shutdown()
     }
 }

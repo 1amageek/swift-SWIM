@@ -120,10 +120,10 @@ public actor SWIMInstance {
         }
     }
 
-    /// Stops the SWIM protocol.
+    /// Shuts down the SWIM protocol.
     ///
     /// This cancels the protocol loop and cleans up resources.
-    public func stop() async {
+    public func shutdown() async throws {
         isRunning = false
         protocolTask?.cancel()
         receiveTask?.cancel()
@@ -180,7 +180,7 @@ public actor SWIMInstance {
     /// Leaves the cluster gracefully.
     ///
     /// Broadcasts a dead status for ourselves before stopping.
-    public func leave() async {
+    public func leave() async throws {
         // Mark ourselves as dead
         localMember.status = .dead
 
@@ -194,12 +194,16 @@ public actor SWIMInstance {
         let ping = SWIMMessage.ping(sequenceNumber: 0, payload: payload)
 
         for target in targets {
-            try? await transport.send(ping, to: target.id)
+            do {
+                try await transport.send(ping, to: target.id)
+            } catch {
+                continue
+            }
         }
 
         eventContinuation.yield(.memberLeft(localMember.id))
 
-        await stop()
+        try await shutdown()
     }
 
     /// Returns all current members.
@@ -257,6 +261,10 @@ public actor SWIMInstance {
         switch result {
         case .alive, .aliveIndirect:
             // Member is alive, nothing to do
+            break
+
+        case .transportFailure:
+            // Local transport failed before the probe left this node.
             break
 
         case .suspect:
@@ -329,7 +337,11 @@ public actor SWIMInstance {
                 return .alive
             }
 
-            try? await Task.sleep(for: checkInterval)
+            do {
+                try await Task.sleep(for: checkInterval)
+            } catch {
+                return .timeout
+            }
         }
 
         return .timeout
@@ -353,6 +365,8 @@ public actor SWIMInstance {
             pendingProbes[originalSeq] = probe
         }
 
+        var dispatchedProbeCount = 0
+
         for prober in probers {
             let pingReq = SWIMMessage.pingRequest(
                 sequenceNumber: originalSeq,
@@ -360,7 +374,16 @@ public actor SWIMInstance {
                 payload: payload
             )
 
-            try? await transport.send(pingReq, to: prober.id)
+            do {
+                try await transport.send(pingReq, to: prober.id)
+                dispatchedProbeCount += 1
+            } catch {
+                continue
+            }
+        }
+
+        guard dispatchedProbeCount > 0 else {
+            return .transportFailure
         }
 
         // Wait for any indirect ack
@@ -466,7 +489,11 @@ public actor SWIMInstance {
             payload: payload
         )
 
-        try? await transport.send(ack, to: sender)
+        do {
+            try await transport.send(ack, to: sender)
+        } catch {
+            return
+        }
     }
 
     private func handlePingRequest(
@@ -495,7 +522,11 @@ public actor SWIMInstance {
             // Failed to send, send nack immediately
             pendingProbes.removeValue(forKey: probeSeq)
             let nack = SWIMMessage.nack(sequenceNumber: sequenceNumber, target: target)
-            try? await transport.send(nack, to: sender)
+            do {
+                try await transport.send(nack, to: sender)
+            } catch {
+                return
+            }
             return
         }
 
@@ -540,11 +571,19 @@ public actor SWIMInstance {
                 target: target,
                 payload: ackPayload
             )
-            try? await transport.send(ack, to: requester)
+            do {
+                try await transport.send(ack, to: requester)
+            } catch {
+                return
+            }
         } else {
             // Target didn't respond, send nack
             let nack = SWIMMessage.nack(sequenceNumber: originalSeq, target: target)
-            try? await transport.send(nack, to: requester)
+            do {
+                try await transport.send(nack, to: requester)
+            } catch {
+                return
+            }
         }
     }
 
@@ -556,7 +595,7 @@ public actor SWIMInstance {
         // Mark pending probe as received (if exists)
         if var probe = pendingProbes[sequenceNumber] {
             // Validate that the ack is from the expected target
-            if probe.target == sender {
+            if probe.target == target {
                 probe.ackReceived = true
                 pendingProbes[sequenceNumber] = probe
             }

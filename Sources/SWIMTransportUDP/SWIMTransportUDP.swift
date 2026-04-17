@@ -7,13 +7,19 @@ import SWIM
 import NIOUDPTransport
 import NIOCore
 import Synchronization
+import os
+
+private let swimUDPTransportLogger = Logger(
+    subsystem: "swift-libp2p",
+    category: "SWIMTransportUDP"
+)
 
 /// UDP transport implementation for SWIM protocol.
 ///
 /// Uses `NIOUDPTransport` from swift-nio-udp for actual network communication.
 ///
 /// ## Lifecycle
-/// This transport is **single-use**: once `stop()` is called, the transport cannot be
+/// This transport is **single-use**: once `shutdown()` is called, the transport cannot be
 /// restarted. Create a new instance if you need to restart communication.
 ///
 /// ## Performance Optimizations
@@ -211,10 +217,10 @@ public final class SWIMUDPTransport: SWIMTransport, Sendable {
         state.withLock { $0.receiveTask = task }
     }
 
-    /// Stops the transport.
+    /// Shuts down the transport.
     ///
     /// Closes the socket and stops receiving messages.
-    public func stop() async {
+    public func shutdown() async throws {
         let task = state.withLock { state in
             state.isStarted = false
             state.isStopped = true  // Mark as permanently stopped
@@ -224,7 +230,7 @@ public final class SWIMUDPTransport: SWIMTransport, Sendable {
         }
 
         task?.cancel()
-        await udp.stop()
+        try await udp.shutdown()
         messageContinuation.finish()
     }
 
@@ -272,9 +278,7 @@ public final class SWIMUDPTransport: SWIMTransport, Sendable {
         for await datagram in udp.incomingDatagrams {
             // Skip datagrams with unknown sender address to preserve SWIM membership semantics
             guard let senderAddress = datagram.remoteAddress.hostPortString else {
-                #if DEBUG
-                print("SWIMTransportUDP: Skipping datagram with unknown sender address")
-                #endif
+                swimUDPTransportLogger.debug("Skipping datagram with unknown sender address")
                 continue
             }
 
@@ -289,9 +293,7 @@ public final class SWIMUDPTransport: SWIMTransport, Sendable {
                 _ = messageContinuation.yield((message, senderID))
             } catch {
                 // Log decode error but continue receiving
-                #if DEBUG
-                print("SWIMTransportUDP: Failed to decode message from \(senderAddress): \(error)")
-                #endif
+                swimUDPTransportLogger.debug("Failed to decode message from \(senderAddress): \(String(describing: error))")
             }
         }
     }
