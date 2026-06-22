@@ -5,24 +5,19 @@
 /// A single membership update to be disseminated.
 public struct MembershipUpdate: Sendable, Hashable {
     /// The member this update is about.
-    @usableFromInline
-    let memberID: MemberID
+    public let memberID: MemberID
 
     /// The member's address.
-    @usableFromInline
-    let address: String
+    public let address: String
 
     /// The status being reported.
-    @usableFromInline
-    let status: MemberStatus
+    public let status: MemberStatus
 
     /// The incarnation number of this update.
-    @usableFromInline
-    let incarnation: Incarnation
+    public let incarnation: Incarnation
 
-    /// Number of times this update has been piggybacked (internal use).
-    @usableFromInline
-    var disseminationCount: Int
+    /// Number of times this update has been piggybacked.
+    public var disseminationCount: Int
 
     /// Creates a membership update.
     @inlinable
@@ -67,7 +62,7 @@ public struct MembershipUpdate: Sendable, Hashable {
     ///
     /// - Throws: ``SWIMCodecError/stringTooLong(byteCount:)`` via the member ID.
     @inlinable
-    public func encode(to buffer: inout WriteBuffer) throws {
+    public func encode(to buffer: inout WriteBuffer) throws(SWIMCodecError) {
         try memberID.encode(to: &buffer)
         status.encode(to: &buffer)
         incarnation.encode(to: &buffer)
@@ -110,8 +105,7 @@ extension MembershipUpdate: CustomStringConvertible {
 /// Contains membership updates to disseminate to other members.
 public struct GossipPayload: Sendable, Hashable {
     /// Membership updates to disseminate.
-    @usableFromInline
-    var updates: [MembershipUpdate]
+    public var updates: [MembershipUpdate]
 
     /// Creates a gossip payload with the given updates.
     @inlinable
@@ -149,7 +143,7 @@ public struct GossipPayload: Sendable, Hashable {
     ///
     /// - Throws: ``SWIMCodecError/stringTooLong(byteCount:)`` via member IDs.
     @inlinable
-    public func encode(to buffer: inout WriteBuffer) throws {
+    public func encode(to buffer: inout WriteBuffer) throws(SWIMCodecError) {
         buffer.writeUInt16(UInt16(updates.count))
         for update in updates {
             try update.encode(to: &buffer)

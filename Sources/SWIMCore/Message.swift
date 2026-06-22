@@ -70,7 +70,7 @@ public enum SWIMMessage: Sendable, Hashable {
     /// - Throws: ``SWIMCodecError/stringTooLong(byteCount:)`` if any contained
     ///   identifier/address exceeds the 16-bit length field.
     @inlinable
-    public func encode(to buffer: inout WriteBuffer) throws {
+    public func encode(to buffer: inout WriteBuffer) throws(SWIMCodecError) {
         // Type
         buffer.writeUInt8(typeCode)
 

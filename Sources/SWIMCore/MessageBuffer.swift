@@ -1,8 +1,9 @@
 /// SWIM Message Buffer
 ///
 /// Zero-copy buffer utilities for efficient message encoding/decoding.
-
-import Foundation
+///
+/// Foundation-free: `WriteBuffer` owns `[UInt8]` and finalizes to `[UInt8]`.
+/// The Foundation `Data` bridges live in the `SWIM` adapter.
 
 // MARK: - Read Buffer
 
@@ -93,12 +94,15 @@ public struct ReadBuffer: ~Copyable {
         return UnsafeRawBufferPointer(start: base + offset, count: count)
     }
 
-    /// Reads a UTF-8 string at the given offset.
+    /// Reads a validated UTF-8 string at the given offset.
+    ///
+    /// Returns `nil` if the bytes are not valid UTF-8, surfacing malformed input
+    /// to the decoder rather than substituting replacement characters.
     @inlinable
     public func readString(at offset: Int, length: Int) -> String? {
         guard offset + length <= count else { return nil }
         let ptr = UnsafeRawBufferPointer(start: base + offset, count: length)
-        return String(bytes: ptr, encoding: .utf8)
+        return validatedUTF8String(ptr)
     }
 
     /// Checks if the buffer has enough bytes from the given offset.
@@ -177,19 +181,13 @@ public struct WriteBuffer: ~Copyable {
     ///   encoding exceeds the 16-bit length field (65535 bytes). This replaces a
     ///   hard trap so an over-long identifier cannot crash the encoder.
     @inlinable
-    public mutating func writeLengthPrefixedString(_ string: String) throws {
+    public mutating func writeLengthPrefixedString(_ string: String) throws(SWIMCodecError) {
         let bytes = Array(string.utf8)
         guard bytes.count <= Int(UInt16.max) else {
             throw SWIMCodecError.stringTooLong(byteCount: bytes.count)
         }
         writeUInt16(UInt16(bytes.count))
         storage.append(contentsOf: bytes)
-    }
-
-    /// Converts the buffer to Data.
-    @inlinable
-    public consuming func toData() -> Data {
-        Data(storage)
     }
 
     /// Returns the storage as an array.

@@ -50,4 +50,6 @@
 /// - [SWIM Paper](https://www.cs.cornell.edu/projects/Quicksilver/public_pdfs/SWIM.pdf)
 /// - [Lifeguard (SWIM extensions)](https://arxiv.org/abs/1707.00788)
 
-// Module exports are automatic - all public types are accessible via `import SWIM`
+// Re-export the Embedded-clean codec + membership value/safety types so existing
+// `import SWIM` (and `@testable import SWIM`) call sites resolve them unchanged.
+@_exported import SWIMCore

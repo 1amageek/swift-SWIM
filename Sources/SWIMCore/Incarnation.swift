@@ -13,8 +13,7 @@
 /// This mechanism prevents old information from overriding newer state.
 public struct Incarnation: Sendable, Hashable {
     /// The incarnation value.
-    @usableFromInline
-    let value: UInt64
+    public let value: UInt64
 
     /// Creates an incarnation with the given value.
     @inlinable

@@ -2,8 +2,6 @@
 ///
 /// Defines the identity and state of members in a SWIM cluster.
 
-import Foundation
-
 /// Unique identifier for a SWIM member.
 ///
 /// Each member has a unique ID and a network address.
@@ -26,21 +24,12 @@ public struct MemberID: Sendable, Hashable {
         self.address = address
     }
 
-    /// Creates a member ID with auto-generated UUID.
-    ///
-    /// - Parameter address: Network address in "host:port" format
-    @inlinable
-    public init(address: String) {
-        self.id = UUID().uuidString
-        self.address = address
-    }
-
     /// Encodes the member ID to a write buffer.
     ///
     /// - Throws: ``SWIMCodecError/stringTooLong(byteCount:)`` if `id` or
     ///   `address` exceeds the 16-bit length field.
     @inlinable
-    public func encode(to buffer: inout WriteBuffer) throws {
+    public func encode(to buffer: inout WriteBuffer) throws(SWIMCodecError) {
         try buffer.writeLengthPrefixedString(id)
         try buffer.writeLengthPrefixedString(address)
     }
@@ -83,8 +72,6 @@ extension MemberID: CustomStringConvertible {
         "\(id)@\(address)"
     }
 }
-
-extension MemberID: Codable {}
 
 // MARK: - Member
 
@@ -141,7 +128,7 @@ public struct Member: Sendable, Hashable {
     ///
     /// - Throws: ``SWIMCodecError/stringTooLong(byteCount:)`` via the member ID.
     @inlinable
-    public func encode(to buffer: inout WriteBuffer) throws {
+    public func encode(to buffer: inout WriteBuffer) throws(SWIMCodecError) {
         try id.encode(to: &buffer)
         status.encode(to: &buffer)
         incarnation.encode(to: &buffer)

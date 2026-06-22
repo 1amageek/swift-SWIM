@@ -1,8 +1,15 @@
 /// SWIM Message Authenticator
 ///
 /// Optional message-authentication hook for the SWIM wire protocol.
+///
+/// This protocol lives in the `SWIM` adapter (not `SWIMCore`): its `sign`
+/// requirement uses untyped `throws` so that conformers may surface any backend
+/// error, which is incompatible with Embedded Swift's typed-throws-only
+/// requirement. Only `verify` is consumed by the orchestration layer; the
+/// concrete HMAC authenticator (using the `MessageAuthenticationCode` seam) is
+/// also an adapter concern.
 
-import Foundation
+import SWIMCore
 
 /// Authenticates SWIM datagrams.
 ///
