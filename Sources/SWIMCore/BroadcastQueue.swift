@@ -1,8 +1,10 @@
 /// SWIM Broadcast Queue
 ///
 /// Priority queue for membership updates to be disseminated.
-
-import Synchronization
+///
+/// This is an Embedded-clean value type: no `Synchronization.Mutex`, no clock,
+/// no Foundation. The caller (the `Disseminator` adapter) owns synchronization
+/// and drives this queue's `mutating` methods under its own lock.
 
 /// Priority queue for membership updates.
 ///
@@ -13,22 +15,22 @@ import Synchronization
 ///
 /// Uses a Dictionary-based storage for O(1) push operations.
 /// Sorting is performed on-demand during peek/pop.
-internal struct BroadcastQueue: Sendable {
+public struct BroadcastQueue: Sendable {
     /// MemberID -> latest update mapping
     private var memberUpdates: [MemberID: MembershipUpdate]
 
     /// Creates an empty broadcast queue.
-    init() {
+    public init() {
         self.memberUpdates = [:]
     }
 
     /// Whether the queue is empty.
-    var isEmpty: Bool {
+    public var isEmpty: Bool {
         memberUpdates.isEmpty
     }
 
     /// Number of updates in the queue.
-    var count: Int {
+    public var count: Int {
         memberUpdates.count
     }
 
@@ -38,10 +40,10 @@ internal struct BroadcastQueue: Sendable {
     /// only if the new update has higher priority.
     ///
     /// Complexity: O(1)
-    mutating func push(_ update: MembershipUpdate) {
+    public mutating func push(_ update: MembershipUpdate) {
         if let existing = memberUpdates[update.memberID] {
             // Check if new update should replace existing
-            if shouldReplace(existing: existing, with: update) {
+            if Self.shouldReplace(existing: existing, with: update) {
                 memberUpdates[update.memberID] = update
             }
         } else {
@@ -52,7 +54,7 @@ internal struct BroadcastQueue: Sendable {
     /// Pops the highest priority update from the queue.
     ///
     /// Complexity: O(n log n) due to sorting
-    mutating func pop() -> MembershipUpdate? {
+    public mutating func pop() -> MembershipUpdate? {
         let updates = peek(count: 1)
         guard let first = updates.first else { return nil }
         memberUpdates.removeValue(forKey: first.memberID)
@@ -62,7 +64,7 @@ internal struct BroadcastQueue: Sendable {
     /// Peeks at the highest priority updates without removing them.
     ///
     /// Complexity: O(n log n) for sorting, O(k) for taking k elements
-    func peek(count: Int) -> [MembershipUpdate] {
+    public func peek(count: Int) -> [MembershipUpdate] {
         let sorted = memberUpdates.values.sorted { lhs, rhs in
             // Higher priority first
             if lhs.status.disseminationPriority != rhs.status.disseminationPriority {
@@ -83,14 +85,14 @@ internal struct BroadcastQueue: Sendable {
     /// Removes an update for the given member.
     ///
     /// Complexity: O(1)
-    mutating func remove(for memberID: MemberID) {
+    public mutating func remove(for memberID: MemberID) {
         memberUpdates.removeValue(forKey: memberID)
     }
 
     /// Increments the dissemination count for updates that were sent.
     ///
     /// Complexity: O(m) where m is the number of member IDs
-    mutating func incrementDisseminationCount(for memberIDs: Set<MemberID>) {
+    public mutating func incrementDisseminationCount(for memberIDs: Set<MemberID>) {
         for id in memberIDs {
             memberUpdates[id]?.disseminationCount += 1
         }
@@ -99,13 +101,13 @@ internal struct BroadcastQueue: Sendable {
     /// Removes updates that have exceeded the dissemination limit.
     ///
     /// Complexity: O(n)
-    mutating func removeExpired(limit: Int) {
+    public mutating func removeExpired(limit: Int) {
         memberUpdates = memberUpdates.filter { $0.value.disseminationCount < limit }
     }
 
     // MARK: - Private
 
-    private func shouldReplace(existing: MembershipUpdate, with new: MembershipUpdate) -> Bool {
+    private static func shouldReplace(existing: MembershipUpdate, with new: MembershipUpdate) -> Bool {
         // Higher incarnation always wins
         if new.incarnation > existing.incarnation {
             return true

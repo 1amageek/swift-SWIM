@@ -1,28 +1,24 @@
 /// SWIM Disseminator
 ///
 /// Manages gossip dissemination of membership updates.
+///
+/// ## Caller-locked adapter
+///
+/// This is the host-side adapter over the Embedded-clean value-type
+/// `SWIMCore.DisseminationState`. It owns the `Synchronization.Mutex`; every
+/// public method delegates to the value type's `mutating` methods under the lock,
+/// so `Disseminator` keeps its existing `Sendable`, thread-safe behavior. The
+/// value type has no Mutex, no clock, and no Foundation.
 
 import Synchronization
 
 /// Manages gossip dissemination.
 ///
-/// The disseminator maintains a queue of membership updates that should
-/// be piggybacked on protocol messages. Updates are sent multiple times
-/// (controlled by `disseminationLimit`) to ensure reliable propagation.
+/// The disseminator maintains a queue of membership updates that should be
+/// piggybacked on protocol messages. Updates are sent multiple times (controlled
+/// by `disseminationLimit`) to ensure reliable propagation.
 public final class Disseminator: Sendable {
     private let state: Mutex<DisseminationState>
-    private let maxPayloadSize: Int
-
-    private struct DisseminationState: Sendable {
-        var queue: BroadcastQueue
-        /// Number of times to send each update.
-        ///
-        /// This must grow with `log(N)` as the cluster grows, so it lives in the
-        /// mutable state rather than being fixed at init. Otherwise large
-        /// clusters would under-disseminate (each update dropped after too few
-        /// sends to reach everyone).
-        var disseminationLimit: Int
-    }
 
     /// Creates a new disseminator.
     ///
@@ -30,22 +26,19 @@ public final class Disseminator: Sendable {
     ///   - maxPayloadSize: Maximum number of updates per message
     ///   - disseminationLimit: Initial number of times to send each update
     public init(maxPayloadSize: Int = 10, disseminationLimit: Int = 6) {
-        self.maxPayloadSize = maxPayloadSize
         self.state = Mutex(
-            DisseminationState(queue: BroadcastQueue(), disseminationLimit: disseminationLimit)
+            DisseminationState(
+                maxPayloadSize: maxPayloadSize,
+                disseminationLimit: disseminationLimit
+            )
         )
     }
 
     /// Updates the dissemination limit to reflect the current cluster size.
     ///
-    /// Call this when the member count changes so each update is piggybacked
-    /// enough times to reach the whole (grown) cluster.
-    ///
     /// - Parameter newLimit: The recomputed limit (must be at least 1).
     public func updateDisseminationLimit(_ newLimit: Int) {
-        state.withLock { state in
-            state.disseminationLimit = Swift.max(1, newLimit)
-        }
+        state.withLock { $0.updateDisseminationLimit(newLimit) }
     }
 
     /// The current dissemination limit.
@@ -56,29 +49,18 @@ public final class Disseminator: Sendable {
     // MARK: - Enqueue Updates
 
     /// Enqueues a membership update for dissemination.
-    ///
-    /// - Parameter update: The update to disseminate
     public func enqueue(_ update: MembershipUpdate) {
-        state.withLock { state in
-            state.queue.push(update)
-        }
+        state.withLock { $0.enqueue(update) }
     }
 
     /// Enqueues a membership update for a member.
-    ///
-    /// - Parameter member: The member whose state to disseminate
     public func enqueue(member: Member) {
-        let update = MembershipUpdate(member: member)
-        enqueue(update)
+        state.withLock { $0.enqueue(member: member) }
     }
 
     /// Enqueues multiple updates.
     public func enqueue(_ updates: [MembershipUpdate]) {
-        state.withLock { state in
-            for update in updates {
-                state.queue.push(update)
-            }
-        }
+        state.withLock { $0.enqueue(updates) }
     }
 
     // MARK: - Get Payload
@@ -87,43 +69,23 @@ public final class Disseminator: Sendable {
     ///
     /// This returns up to `maxPayloadSize` updates and increments their
     /// dissemination count.
-    ///
-    /// - Returns: Gossip payload with updates to send
     public func getPayloadForMessage() -> GossipPayload {
-        state.withLock { state in
-            // Get top priority updates
-            let updates = state.queue.peek(count: maxPayloadSize)
-
-            if updates.isEmpty {
-                return .empty
-            }
-
-            // Increment dissemination count
-            let memberIDs = Set(updates.map { $0.memberID })
-            state.queue.incrementDisseminationCount(for: memberIDs)
-
-            // Remove expired updates
-            state.queue.removeExpired(limit: state.disseminationLimit)
-
-            return GossipPayload(updates: updates)
-        }
+        state.withLock { $0.getPayloadForMessage() }
     }
 
     /// Gets updates without incrementing dissemination count.
-    ///
-    /// Useful for inspecting the queue without side effects.
     public func peekUpdates(count: Int? = nil) -> [MembershipUpdate] {
-        state.withLock { state in
-            state.queue.peek(count: count ?? maxPayloadSize)
-        }
+        state.withLock { $0.peekUpdates(count: count) }
     }
 
     // MARK: - Process Incoming Payload
 
     /// Processes a received gossip payload.
     ///
-    /// Updates the member list based on the received updates and
-    /// returns any membership changes that occurred.
+    /// Updates the member list based on the received updates and returns any
+    /// membership changes that occurred. This orchestrates across both the member
+    /// list and this disseminator, so it stays in the adapter (the value-type
+    /// cores are single-responsibility).
     ///
     /// - Parameters:
     ///   - payload: The received gossip payload
@@ -142,7 +104,7 @@ public final class Disseminator: Sendable {
             if let change = memberList.update(member) {
                 changes.append(change)
 
-                // Re-disseminate this update to help propagation
+                // Re-disseminate this update to help propagation.
                 enqueue(update)
             }
         }
@@ -154,25 +116,21 @@ public final class Disseminator: Sendable {
 
     /// Returns the number of updates in the queue.
     public var pendingCount: Int {
-        state.withLock { $0.queue.count }
+        state.withLock { $0.pendingCount }
     }
 
     /// Whether the queue is empty.
     public var isEmpty: Bool {
-        state.withLock { $0.queue.isEmpty }
+        state.withLock { $0.isEmpty }
     }
 
     /// Removes an update for a specific member.
     public func remove(for memberID: MemberID) {
-        state.withLock { state in
-            state.queue.remove(for: memberID)
-        }
+        state.withLock { $0.remove(for: memberID) }
     }
 
     /// Clears all pending updates.
     public func clear() {
-        state.withLock { state in
-            state.queue = BroadcastQueue()
-        }
+        state.withLock { $0.clear() }
     }
 }
