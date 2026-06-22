@@ -36,10 +36,13 @@ public struct MemberID: Sendable, Hashable {
     }
 
     /// Encodes the member ID to a write buffer.
+    ///
+    /// - Throws: ``SWIMCodecError/stringTooLong(byteCount:)`` if `id` or
+    ///   `address` exceeds the 16-bit length field.
     @inlinable
-    public func encode(to buffer: inout WriteBuffer) {
-        buffer.writeLengthPrefixedString(id)
-        buffer.writeLengthPrefixedString(address)
+    public func encode(to buffer: inout WriteBuffer) throws {
+        try buffer.writeLengthPrefixedString(id)
+        try buffer.writeLengthPrefixedString(address)
     }
 
     /// Decodes a member ID from a read buffer.
@@ -135,9 +138,11 @@ public struct Member: Sendable, Hashable {
     }
 
     /// Encodes the member to a write buffer.
+    ///
+    /// - Throws: ``SWIMCodecError/stringTooLong(byteCount:)`` via the member ID.
     @inlinable
-    public func encode(to buffer: inout WriteBuffer) {
-        id.encode(to: &buffer)
+    public func encode(to buffer: inout WriteBuffer) throws {
+        try id.encode(to: &buffer)
         status.encode(to: &buffer)
         incarnation.encode(to: &buffer)
     }

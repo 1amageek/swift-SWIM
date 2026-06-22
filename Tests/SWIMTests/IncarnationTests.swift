@@ -64,12 +64,23 @@ struct IncarnationTests {
         #expect(set.count == 1)
     }
 
-    @Test("Incarnation overflow wraps around")
-    func overflowWraps() {
+    @Test("Incarnation saturates at max instead of wrapping")
+    func saturatesAtMax() {
         let maxInc = Incarnation(value: UInt64.max)
-        let wrapped = maxInc.incremented()
+        let saturated = maxInc.incremented()
 
-        #expect(wrapped.value == 0)
+        // A logical clock must be monotonic: incrementing the maximum value
+        // saturates rather than wrapping to 0 (which would let a stale 0 outrank
+        // a legitimate maximum).
+        #expect(saturated.value == UInt64.max)
+        #expect(saturated == Incarnation.max)
+        #expect(maxInc.isSaturated)
+        #expect(saturated.isSaturated)
+
+        // One below max still advances normally.
+        let nearMax = Incarnation(value: UInt64.max - 1)
+        #expect(!nearMax.isSaturated)
+        #expect(nearMax.incremented().value == UInt64.max)
     }
 
     @Test("Incarnation description")

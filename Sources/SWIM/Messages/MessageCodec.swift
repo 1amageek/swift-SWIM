@@ -6,11 +6,16 @@
 import Foundation
 
 /// Errors that can occur during message encoding/decoding.
-public enum SWIMCodecError: Error, Sendable {
+public enum SWIMCodecError: Error, Sendable, Equatable {
     case invalidMessageType(UInt8)
     case truncatedMessage
     case invalidUTF8
     case messageTooLarge(Int)
+    /// A length-prefixed string exceeded the 16-bit length field (65535 bytes).
+    ///
+    /// Surfaced instead of trapping so an over-long identifier/address cannot
+    /// crash the encoder.
+    case stringTooLong(byteCount: Int)
 }
 
 /// High-performance binary codec for SWIM messages.
@@ -53,20 +58,26 @@ public enum SWIMMessageCodec {
     /// Encodes a SWIM message to binary format.
     ///
     /// Uses optimized WriteBuffer for zero-copy encoding.
+    ///
+    /// - Throws: ``SWIMCodecError/stringTooLong(byteCount:)`` if any contained
+    ///   identifier/address exceeds the 16-bit length field.
     @inlinable
-    public static func encode(_ message: SWIMMessage) -> Data {
+    public static func encode(_ message: SWIMMessage) throws -> Data {
         var buffer = WriteBuffer(capacity: 256)
-        message.encode(to: &buffer)
+        try message.encode(to: &buffer)
         return buffer.toData()
     }
 
     /// Encodes a SWIM message to bytes.
     ///
     /// Returns raw bytes instead of Data for lower overhead.
+    ///
+    /// - Throws: ``SWIMCodecError/stringTooLong(byteCount:)`` if any contained
+    ///   identifier/address exceeds the 16-bit length field.
     @inlinable
-    public static func encodeToBytes(_ message: SWIMMessage) -> [UInt8] {
+    public static func encodeToBytes(_ message: SWIMMessage) throws -> [UInt8] {
         var buffer = WriteBuffer(capacity: 256)
-        message.encode(to: &buffer)
+        try message.encode(to: &buffer)
         return buffer.toBytes()
     }
 

@@ -12,7 +12,7 @@ struct MessageCodecTests {
     @Test("Encode and decode ping with empty payload")
     func pingEmptyPayload() throws {
         let original = SWIMMessage.ping(sequenceNumber: 12345, payload: .empty)
-        let data = SWIMMessageCodec.encode(original)
+        let data = try SWIMMessageCodec.encode(original)
         let decoded = try SWIMMessageCodec.decode(data)
 
         if case .ping(let seq, let payload) = decoded {
@@ -35,7 +35,7 @@ struct MessageCodecTests {
         let payload = GossipPayload(updates: [update])
         let original = SWIMMessage.ping(sequenceNumber: 999, payload: payload)
 
-        let data = SWIMMessageCodec.encode(original)
+        let data = try SWIMMessageCodec.encode(original)
         let decoded = try SWIMMessageCodec.decode(data)
 
         if case .ping(let seq, let decodedPayload) = decoded {
@@ -60,7 +60,7 @@ struct MessageCodecTests {
             payload: .empty
         )
 
-        let data = SWIMMessageCodec.encode(original)
+        let data = try SWIMMessageCodec.encode(original)
         let decoded = try SWIMMessageCodec.decode(data)
 
         if case .pingRequest(let seq, let decodedTarget, let payload) = decoded {
@@ -89,7 +89,7 @@ struct MessageCodecTests {
             payload: payload
         )
 
-        let data = SWIMMessageCodec.encode(original)
+        let data = try SWIMMessageCodec.encode(original)
         let decoded = try SWIMMessageCodec.decode(data)
 
         if case .pingRequest(let seq, let decodedTarget, let decodedPayload) = decoded {
@@ -114,7 +114,7 @@ struct MessageCodecTests {
             payload: .empty
         )
 
-        let data = SWIMMessageCodec.encode(original)
+        let data = try SWIMMessageCodec.encode(original)
         let decoded = try SWIMMessageCodec.decode(data)
 
         if case .ack(let seq, let decodedTarget, let payload) = decoded {
@@ -133,7 +133,7 @@ struct MessageCodecTests {
         let target = MemberID(id: "unreachable", address: "10.0.0.99:8080")
         let original = SWIMMessage.nack(sequenceNumber: 77777, target: target)
 
-        let data = SWIMMessageCodec.encode(original)
+        let data = try SWIMMessageCodec.encode(original)
         let decoded = try SWIMMessageCodec.decode(data)
 
         if case .nack(let seq, let decodedTarget) = decoded {
@@ -174,7 +174,7 @@ struct MessageCodecTests {
         let payload = GossipPayload(updates: updates)
         let original = SWIMMessage.ping(sequenceNumber: 1, payload: payload)
 
-        let data = SWIMMessageCodec.encode(original)
+        let data = try SWIMMessageCodec.encode(original)
         let decoded = try SWIMMessageCodec.decode(data)
 
         if case .ping(_, let decodedPayload) = decoded {
@@ -201,7 +201,7 @@ struct MessageCodecTests {
     @Test("Sequence number max value")
     func maxSequenceNumber() throws {
         let original = SWIMMessage.ping(sequenceNumber: UInt64.max, payload: .empty)
-        let data = SWIMMessageCodec.encode(original)
+        let data = try SWIMMessageCodec.encode(original)
         let decoded = try SWIMMessageCodec.decode(data)
 
         if case .ping(let seq, _) = decoded {
@@ -216,7 +216,7 @@ struct MessageCodecTests {
         let target = MemberID(id: "", address: "")
         let original = SWIMMessage.nack(sequenceNumber: 1, target: target)
 
-        let data = SWIMMessageCodec.encode(original)
+        let data = try SWIMMessageCodec.encode(original)
         let decoded = try SWIMMessageCodec.decode(data)
 
         if case .nack(_, let decodedTarget) = decoded {
@@ -234,7 +234,7 @@ struct MessageCodecTests {
         let target = MemberID(id: longID, address: longAddress)
         let original = SWIMMessage.nack(sequenceNumber: 1, target: target)
 
-        let data = SWIMMessageCodec.encode(original)
+        let data = try SWIMMessageCodec.encode(original)
         let decoded = try SWIMMessageCodec.decode(data)
 
         if case .nack(_, let decodedTarget) = decoded {
@@ -250,7 +250,7 @@ struct MessageCodecTests {
         let target = MemberID(id: "ノード1", address: "日本語:8000")
         let original = SWIMMessage.nack(sequenceNumber: 1, target: target)
 
-        let data = SWIMMessageCodec.encode(original)
+        let data = try SWIMMessageCodec.encode(original)
         let decoded = try SWIMMessageCodec.decode(data)
 
         if case .nack(_, let decodedTarget) = decoded {
@@ -306,7 +306,7 @@ struct MessageCodecTests {
             payload: GossipPayload(updates: [update])
         )
 
-        var data = SWIMMessageCodec.encode(original)
+        var data = try SWIMMessageCodec.encode(original)
         let memberIDLength = 2 + "node1".utf8.count + 2 + "127.0.0.1:8000".utf8.count
         let statusOffset = 1 + 8 + 2 + memberIDLength
         data[statusOffset] = 0xFF

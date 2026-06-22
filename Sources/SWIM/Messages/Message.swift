@@ -66,8 +66,11 @@ public enum SWIMMessage: Sendable, Hashable {
     }
 
     /// Encodes the message to a write buffer.
+    ///
+    /// - Throws: ``SWIMCodecError/stringTooLong(byteCount:)`` if any contained
+    ///   identifier/address exceeds the 16-bit length field.
     @inlinable
-    public func encode(to buffer: inout WriteBuffer) {
+    public func encode(to buffer: inout WriteBuffer) throws {
         // Type
         buffer.writeUInt8(typeCode)
 
@@ -76,18 +79,18 @@ public enum SWIMMessage: Sendable, Hashable {
 
         switch self {
         case .ping(_, let payload):
-            payload.encode(to: &buffer)
+            try payload.encode(to: &buffer)
 
         case .pingRequest(_, let target, let payload):
-            target.encode(to: &buffer)
-            payload.encode(to: &buffer)
+            try target.encode(to: &buffer)
+            try payload.encode(to: &buffer)
 
         case .ack(_, let target, let payload):
-            target.encode(to: &buffer)
-            payload.encode(to: &buffer)
+            try target.encode(to: &buffer)
+            try payload.encode(to: &buffer)
 
         case .nack(_, let target):
-            target.encode(to: &buffer)
+            try target.encode(to: &buffer)
         }
     }
 

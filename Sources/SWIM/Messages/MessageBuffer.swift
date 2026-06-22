@@ -32,14 +32,6 @@ public struct ReadBuffer: ~Copyable {
         self.count = buffer.count
     }
 
-    /// Creates an empty read buffer (for error cases).
-    @inlinable
-    public static var empty: ReadBuffer {
-        // Use a dummy pointer for empty buffer
-        let dummy = UnsafeRawPointer(bitPattern: 1)!
-        return ReadBuffer(base: dummy, count: 0)
-    }
-
     @usableFromInline
     init(base: UnsafeRawPointer, count: Int) {
         self.base = base
@@ -47,22 +39,33 @@ public struct ReadBuffer: ~Copyable {
     }
 
     /// Reads a UInt8 at the given offset.
+    ///
+    /// - Precondition: `offset` is within bounds. The decode path guards reads
+    ///   with ``hasBytes(_:at:)`` first; this check turns any external misuse
+    ///   into a deterministic trap instead of out-of-bounds memory access.
     @inlinable
     public func readUInt8(at offset: Int) -> UInt8 {
-        base.load(fromByteOffset: offset, as: UInt8.self)
+        precondition(offset >= 0 && offset < count, "ReadBuffer.readUInt8 out of bounds")
+        return base.load(fromByteOffset: offset, as: UInt8.self)
     }
 
     /// Reads a UInt16 (big-endian) at the given offset.
+    ///
+    /// - Precondition: `[offset, offset + 2)` is within bounds.
     @inlinable
     public func readUInt16(at offset: Int) -> UInt16 {
+        precondition(offset >= 0 && offset + 2 <= count, "ReadBuffer.readUInt16 out of bounds")
         let hi = UInt16(base.load(fromByteOffset: offset, as: UInt8.self))
         let lo = UInt16(base.load(fromByteOffset: offset + 1, as: UInt8.self))
         return (hi << 8) | lo
     }
 
     /// Reads a UInt32 (big-endian) at the given offset.
+    ///
+    /// - Precondition: `[offset, offset + 4)` is within bounds.
     @inlinable
     public func readUInt32(at offset: Int) -> UInt32 {
+        precondition(offset >= 0 && offset + 4 <= count, "ReadBuffer.readUInt32 out of bounds")
         let b0 = UInt32(base.load(fromByteOffset: offset, as: UInt8.self))
         let b1 = UInt32(base.load(fromByteOffset: offset + 1, as: UInt8.self))
         let b2 = UInt32(base.load(fromByteOffset: offset + 2, as: UInt8.self))
@@ -71,8 +74,11 @@ public struct ReadBuffer: ~Copyable {
     }
 
     /// Reads a UInt64 (big-endian) at the given offset.
+    ///
+    /// - Precondition: `[offset, offset + 8)` is within bounds.
     @inlinable
     public func readUInt64(at offset: Int) -> UInt64 {
+        precondition(offset >= 0 && offset + 8 <= count, "ReadBuffer.readUInt64 out of bounds")
         var result: UInt64 = 0
         for i in 0..<8 {
             result = (result << 8) | UInt64(base.load(fromByteOffset: offset + i, as: UInt8.self))
@@ -166,9 +172,16 @@ public struct WriteBuffer: ~Copyable {
     }
 
     /// Appends a string as UTF-8 with a 2-byte length prefix.
+    ///
+    /// - Throws: ``SWIMCodecError/stringTooLong(byteCount:)`` if the UTF-8
+    ///   encoding exceeds the 16-bit length field (65535 bytes). This replaces a
+    ///   hard trap so an over-long identifier cannot crash the encoder.
     @inlinable
-    public mutating func writeLengthPrefixedString(_ string: String) {
+    public mutating func writeLengthPrefixedString(_ string: String) throws {
         let bytes = Array(string.utf8)
+        guard bytes.count <= Int(UInt16.max) else {
+            throw SWIMCodecError.stringTooLong(byteCount: bytes.count)
+        }
         writeUInt16(UInt16(bytes.count))
         storage.append(contentsOf: bytes)
     }

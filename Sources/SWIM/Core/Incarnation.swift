@@ -25,10 +25,31 @@ public struct Incarnation: Sendable, Hashable {
     /// Initial incarnation number (0).
     public static let initial = Incarnation(value: 0)
 
+    /// Maximum representable incarnation value.
+    public static let max = Incarnation(value: UInt64.max)
+
+    /// Whether this incarnation has reached the maximum representable value.
+    ///
+    /// At saturation the logical clock can no longer advance, which means
+    /// refutation can no longer outrank a forged maximum incarnation.
+    @inlinable
+    public var isSaturated: Bool {
+        value == UInt64.max
+    }
+
     /// Returns a new incarnation incremented by 1.
+    ///
+    /// An incarnation is a logical clock and must never decrease. Instead of
+    /// silently wrapping around (which would let a stale `0` outrank a
+    /// legitimate maximum), the value saturates at `UInt64.max`.
+    ///
+    /// - Note: Saturation is surfaced via ``isSaturated`` so callers can react
+    ///   to the (practically unreachable) exhaustion of the clock.
     @inlinable
     public func incremented() -> Incarnation {
-        Incarnation(value: value &+ 1)
+        // Saturate instead of wrapping: a logical clock must be monotonic.
+        guard value < UInt64.max else { return Incarnation(value: UInt64.max) }
+        return Incarnation(value: value + 1)
     }
 
     /// Encodes the incarnation to a write buffer.

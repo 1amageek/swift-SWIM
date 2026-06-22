@@ -252,7 +252,12 @@ public final class SWIMUDPTransport: SWIMTransport, Sendable {
             throw SWIMError.transportError("Transport not started")
         }
 
-        let data = SWIMMessageCodec.encode(message)
+        let data: Data
+        do {
+            data = try SWIMMessageCodec.encode(message)
+        } catch {
+            throw SWIMError.transportError("Failed to encode message: \(error)")
+        }
 
         do {
             // Use cached address or parse and cache

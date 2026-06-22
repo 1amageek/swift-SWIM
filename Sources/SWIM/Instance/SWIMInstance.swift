@@ -42,7 +42,12 @@ public actor SWIMInstance {
     private var receiveTask: Task<Void, Never>?
     private var isRunning: Bool = false
 
-    /// Pending probes awaiting ack responses.
+    /// Pending probes awaiting ack responses, keyed by sequence number.
+    ///
+    /// Each entry holds a single continuation that is resumed exactly once —
+    /// either by `handleAck` (with `.alive`) or by its dedicated timeout task
+    /// (with `.timeout`). On shutdown all pending waiters are resumed with
+    /// `.timeout` so no continuation is leaked.
     private var pendingProbes: [UInt64: PendingProbe] = [:]
 
     /// Sequence number generator for probes.
@@ -58,13 +63,30 @@ public actor SWIMInstance {
     public nonisolated let events: AsyncStream<SWIMEvent>
 
     /// Represents a pending probe awaiting ack.
-    private struct PendingProbe {
+    ///
+    /// The continuation is resumed exactly once and then the entry is removed,
+    /// guaranteeing exactly-once resume across the ack and timeout paths.
+    private final class PendingProbe {
         let target: MemberID
-        let startTime: ContinuousClock.Instant
-        var ackReceived: Bool = false
-        var isIndirect: Bool = false
+        let isIndirect: Bool
         /// For indirect probes: who requested this probe
-        var requester: MemberID? = nil
+        let requester: MemberID?
+        /// The waiter to resume; set to nil once resumed (exactly-once guard).
+        var continuation: CheckedContinuation<ProbeResult, Never>?
+        /// The single timeout task that resumes with `.timeout` if no ack arrives.
+        var timeoutTask: Task<Void, Never>?
+
+        init(
+            target: MemberID,
+            isIndirect: Bool = false,
+            requester: MemberID? = nil
+        ) {
+            self.target = target
+            self.isIndirect = isIndirect
+            self.requester = requester
+            self.continuation = nil
+            self.timeoutTask = nil
+        }
     }
 
     // MARK: - Initialization
@@ -128,6 +150,20 @@ public actor SWIMInstance {
         protocolTask?.cancel()
         receiveTask?.cancel()
         await suspicionTimer.cancelAll()
+
+        // Resume every pending probe waiter so no continuation is leaked. A
+        // probe interrupted by shutdown reports `.timeout` (failure), never a
+        // silent success.
+        let pending = pendingProbes
+        pendingProbes.removeAll()
+        for (_, probe) in pending {
+            probe.timeoutTask?.cancel()
+            if let continuation = probe.continuation {
+                probe.continuation = nil
+                continuation.resume(returning: .timeout)
+            }
+        }
+
         eventContinuation.finish()
     }
 
@@ -147,6 +183,7 @@ public actor SWIMInstance {
 
         var joinedAny = false
         var validSeeds = 0
+        var sendErrors: [(MemberID, Error)] = []
 
         for seed in seeds {
             // Skip ourselves
@@ -166,14 +203,28 @@ public actor SWIMInstance {
                 try await transport.send(ping, to: seed)
                 joinedAny = true
             } catch {
-                // Ignore individual failures, try next seed
+                // Aggregate the failure and try the next seed.
+                sendErrors.append((seed, error))
                 continue
             }
         }
 
-        // Fail if we couldn't contact ANY valid seed
-        if !joinedAny && validSeeds > 0 {
-            throw SWIMError.joinFailed(reason: "Could not contact any seed members")
+        // All seeds were ourselves: we contacted nobody. This is not success.
+        guard validSeeds > 0 else {
+            throw SWIMError.joinFailed(
+                reason: "All provided seeds refer to the local member; no peer was contacted"
+            )
+        }
+
+        // We had peers to contact but could reach none of them. Surface the
+        // aggregated underlying errors instead of silently no-op'ing.
+        if !joinedAny {
+            let detail = sendErrors
+                .map { "\($0.0.address): \($0.1)" }
+                .joined(separator: "; ")
+            throw SWIMError.joinFailed(
+                reason: "Could not contact any of \(validSeeds) seed member(s) [\(detail)]"
+            )
         }
     }
 
@@ -188,22 +239,39 @@ public actor SWIMInstance {
         let update = MembershipUpdate(member: localMember)
         disseminator.enqueue(update)
 
-        // Send a few messages to propagate the update
-        let targets = memberList.randomAliveMembers(count: 3, excluding: [localMember.id])
+        // Recompute the dissemination fan-out from the current cluster size so a
+        // large cluster does not under-disseminate the departure. The fan-out is
+        // bounded by the available alive members.
+        let memberCount = memberList.count
+        let fanOut = config.disseminationLimit(memberCount: memberCount)
+        let targets = memberList.randomAliveMembers(count: fanOut, excluding: [localMember.id])
         let payload = GossipPayload(updates: [update])
         let ping = SWIMMessage.ping(sequenceNumber: 0, payload: payload)
 
+        var sendErrors: [(MemberID, Error)] = []
         for target in targets {
             do {
                 try await transport.send(ping, to: target.id)
             } catch {
+                sendErrors.append((target.id, error))
                 continue
             }
         }
 
         eventContinuation.yield(.memberLeft(localMember.id))
 
+        // Tear down regardless of send outcomes, but surface partial failures so
+        // the caller knows the departure may not have fully propagated.
         try await shutdown()
+
+        if !targets.isEmpty && sendErrors.count == targets.count {
+            let detail = sendErrors
+                .map { "\($0.0.address): \($0.1)" }
+                .joined(separator: "; ")
+            throw SWIMError.transportError(
+                "Failed to propagate leave to any of \(targets.count) member(s) [\(detail)]"
+            )
+        }
     }
 
     /// Returns all current members.
@@ -236,6 +304,13 @@ public actor SWIMInstance {
     }
 
     private func runProtocolPeriod() async {
+        // Keep the dissemination fan-out in sync with the (possibly grown)
+        // cluster size so each update is piggybacked enough times to reach
+        // everyone. Recomputed every period because N changes over time.
+        disseminator.updateDisseminationLimit(
+            config.disseminationLimit(memberCount: memberList.count)
+        )
+
         // Dead member garbage collection
         let removed = memberList.removeDeadMembers(olderThan: config.deadMemberRetention)
         for id in removed {
@@ -293,58 +368,77 @@ public actor SWIMInstance {
         let payload = disseminator.getPayloadForMessage()
         let ping = SWIMMessage.ping(sequenceNumber: seq, payload: payload)
 
-        // Register pending probe
-        pendingProbes[seq] = PendingProbe(
-            target: target.id,
-            startTime: .now
-        )
+        // Register pending probe before sending so an ack that races back is
+        // never lost.
+        let pending = PendingProbe(target: target.id)
+        pendingProbes[seq] = pending
 
         // Send direct ping
         do {
             try await transport.send(ping, to: target.id)
         } catch {
+            // Local send failed: clean up and report timeout (failure), never a
+            // silent success.
             pendingProbes.removeValue(forKey: seq)
             return .timeout
         }
 
-        // Wait for ack with polling
+        // Wait for ack (resumed exactly once by handleAck or the timeout task).
         let result = await waitForAck(sequenceNumber: seq, timeout: config.pingTimeout)
 
         if result == .alive {
-            pendingProbes.removeValue(forKey: seq)
             return .alive
         }
 
-        // Direct ping failed, try indirect probes
-        let indirectResult = await indirectProbe(target, originalSeq: seq)
-
-        pendingProbes.removeValue(forKey: seq)
-        return indirectResult
+        // Direct ping failed, try indirect probes.
+        return await indirectProbe(target, originalSeq: seq)
     }
 
+    /// Awaits the result of the pending probe identified by `sequenceNumber`.
+    ///
+    /// The continuation is registered on the pending probe and resumed exactly
+    /// once: either by `handleAck` (`.alive`) or by the dedicated timeout task
+    /// (`.timeout`). A missing pending entry is treated as a failure
+    /// (`.timeout`) — never a silent success — and shutdown resumes any
+    /// outstanding waiter so the continuation cannot leak.
     private func waitForAck(sequenceNumber: UInt64, timeout: Duration) async -> ProbeResult {
-        let deadline = ContinuousClock.now + timeout
-        let checkInterval = Duration.milliseconds(5)
-
-        while ContinuousClock.now < deadline {
-            // Check if ack was received
-            if let probe = pendingProbes[sequenceNumber], probe.ackReceived {
-                return .alive
-            }
-
-            // Probe was removed (completed elsewhere)
-            if pendingProbes[sequenceNumber] == nil {
-                return .alive
-            }
-
-            do {
-                try await Task.sleep(for: checkInterval)
-            } catch {
-                return .timeout
-            }
+        // If the entry is gone (e.g. already resolved/cleaned up), this is a
+        // failure, not an implicit ack.
+        guard let pending = pendingProbes[sequenceNumber] else {
+            return .timeout
         }
 
-        return .timeout
+        return await withCheckedContinuation { (continuation: CheckedContinuation<ProbeResult, Never>) in
+            pending.continuation = continuation
+
+            // Single timeout task: resumes with `.timeout` exactly once if no
+            // ack arrives first. Cancellation of this task (on ack) is benign.
+            pending.timeoutTask = Task { [weak self] in
+                do {
+                    try await Task.sleep(for: timeout)
+                } catch {
+                    // Cancelled (ack arrived first): the ack path already resumed.
+                    return
+                }
+                await self?.resolveProbe(sequenceNumber: sequenceNumber, result: .timeout)
+            }
+        }
+    }
+
+    /// Resolves the pending probe for `sequenceNumber` exactly once.
+    ///
+    /// Removes the entry, cancels its timeout task, and resumes its waiter (if
+    /// any). Idempotent: a second call for an already-resolved sequence is a
+    /// no-op, guaranteeing exactly-once resume across the ack and timeout paths.
+    private func resolveProbe(sequenceNumber: UInt64, result: ProbeResult) {
+        guard let pending = pendingProbes[sequenceNumber] else { return }
+        pendingProbes.removeValue(forKey: sequenceNumber)
+        pending.timeoutTask?.cancel()
+        pending.timeoutTask = nil
+        if let continuation = pending.continuation {
+            pending.continuation = nil
+            continuation.resume(returning: result)
+        }
     }
 
     private func indirectProbe(_ target: Member, originalSeq: UInt64) async -> ProbeResult {
@@ -359,11 +453,12 @@ public actor SWIMInstance {
 
         let payload = disseminator.getPayloadForMessage()
 
-        // Mark probe as indirect
-        if var probe = pendingProbes[originalSeq] {
-            probe.isIndirect = true
-            pendingProbes[originalSeq] = probe
-        }
+        // The direct-probe phase already resolved (and removed) the entry for
+        // originalSeq. Re-register a fresh pending probe so the indirect ack —
+        // which carries originalSeq — has a waiter to resume. Registered before
+        // dispatch so a fast ack is never lost.
+        let pending = PendingProbe(target: target.id, isIndirect: true)
+        pendingProbes[originalSeq] = pending
 
         var dispatchedProbeCount = 0
 
@@ -383,10 +478,13 @@ public actor SWIMInstance {
         }
 
         guard dispatchedProbeCount > 0 else {
+            // No request left this node: clean up the waiter and report the
+            // local transport failure explicitly.
+            pendingProbes.removeValue(forKey: originalSeq)
             return .transportFailure
         }
 
-        // Wait for any indirect ack
+        // Wait for any indirect ack (resumed exactly once).
         let result = await waitForAck(sequenceNumber: originalSeq, timeout: config.pingTimeout)
 
         if result == .alive {
@@ -412,24 +510,34 @@ public actor SWIMInstance {
                 disseminator.enqueue(member: updatedMember)
             }
 
-            // Start suspicion timer
+            // Capture the incarnation observed at suspicion start. The kill path
+            // requires this exact incarnation (and still-suspect status), so any
+            // refutation in the meantime invalidates the pending kill.
+            let suspectedIncarnation = member.incarnation
             let timeout = config.suspicionTimeout(memberCount: memberList.count)
             await suspicionTimer.startSuspicion(
                 for: member.id,
+                incarnation: suspectedIncarnation,
                 timeout: timeout
-            ) { [weak self] in
+            ) { [weak self] capturedIncarnation in
                 Task { [weak self] in
-                    await self?.markDead(member.id)
+                    await self?.markDead(member.id, suspectedIncarnation: capturedIncarnation)
                 }
             }
         }
     }
 
-    private func markDead(_ memberID: MemberID) async {
-        guard let member = memberList.member(for: memberID) else { return }
-        guard member.status != .dead else { return }
-
-        if let change = memberList.markDead(memberID, incarnation: member.incarnation) {
+    /// Kills a suspected member whose suspicion timeout expired without
+    /// refutation.
+    ///
+    /// The kill only applies when the member is **still** `.suspect` at the
+    /// **exact** `suspectedIncarnation` captured when suspicion started. Any
+    /// refutation (status -> alive and/or incarnation bump) changes one of those,
+    /// so `MemberList.markDead`'s strict precondition rejects the kill. This
+    /// preserves the core safety property: a refuted member is never declared
+    /// dead.
+    private func markDead(_ memberID: MemberID, suspectedIncarnation: Incarnation) async {
+        if let change = memberList.markDead(memberID, incarnation: suspectedIncarnation) {
             // Emit event
             if case .statusChanged(let updated, _) = change {
                 eventContinuation.yield(.memberFailed(updated))
@@ -442,6 +550,16 @@ public actor SWIMInstance {
         }
     }
 
+    /// Cancels a member's pending suspicion kill on every transition out of
+    /// `.suspect` back to `.alive`.
+    ///
+    /// This is the single, centralized cancellation path invoked from every
+    /// recovery route (direct ack, gossiped recovery, self-refutation) so the
+    /// suspicion timer can never outlive a refutation and fire a stale kill.
+    private func cancelSuspicion(for memberID: MemberID) async {
+        await suspicionTimer.cancelSuspicion(for: memberID)
+    }
+
     // MARK: - Message Handling
 
     private func receiveLoop() async {
@@ -451,9 +569,20 @@ public actor SWIMInstance {
     }
 
     private func handleMessage(_ message: SWIMMessage, from sender: MemberID) async {
+        // Trust boundary: when an authenticator is configured, reject any message
+        // that fails verification before its gossip is trusted or it is acted
+        // upon. Without an authenticator, this falls through to the traditional
+        // unauthenticated mode (protected only by the gossip sanity bounds).
+        if let authenticator = config.authenticator, !authenticator.verify(message: message) {
+            eventContinuation.yield(.error(.protocolError(
+                "Rejected unverifiable message from \(sender)"
+            )))
+            return
+        }
+
         // Process gossip payload first
         if let payload = message.payload {
-            processPayload(payload)
+            await processPayload(payload)
         }
 
         switch message {
@@ -507,7 +636,6 @@ public actor SWIMInstance {
         // Register pending probe with requester info for forwarding
         pendingProbes[probeSeq] = PendingProbe(
             target: target,
-            startTime: .now,
             isIndirect: true,
             requester: sender
         )
@@ -561,7 +689,8 @@ public actor SWIMInstance {
         requester: MemberID,
         result: ProbeResult
     ) async {
-        pendingProbes.removeValue(forKey: probeSeq)
+        // The probe entry was already removed when waitForAck resolved it
+        // (ack or timeout); nothing to clean up here.
 
         if result == .alive {
             // Forward ack back to original requester
@@ -592,19 +721,17 @@ public actor SWIMInstance {
         target: MemberID,
         from sender: MemberID
     ) async {
-        // Mark pending probe as received (if exists)
-        if var probe = pendingProbes[sequenceNumber] {
-            // Validate that the ack is from the expected target
-            if probe.target == target {
-                probe.ackReceived = true
-                pendingProbes[sequenceNumber] = probe
-            }
+        // Resume the matching pending probe exactly once. Only an ack from the
+        // expected target counts; a mismatched ack is ignored (the probe keeps
+        // waiting for the right one or times out).
+        if let probe = pendingProbes[sequenceNumber], probe.target == target {
+            resolveProbe(sequenceNumber: sequenceNumber, result: .alive)
         }
 
-        // Cancel suspicion for the sender
-        await suspicionTimer.cancelSuspicion(for: sender)
+        // Cancel suspicion for the sender (centralized recovery path).
+        await cancelSuspicion(for: sender)
 
-        // Mark sender as alive if it was suspect
+        // Mark sender as alive if it was suspect.
         if let member = memberList.member(for: sender), member.status == .suspect {
             if let change = memberList.markAlive(sender, incarnation: member.incarnation.incremented()) {
                 if case .statusChanged(let updated, _) = change {
@@ -615,7 +742,7 @@ public actor SWIMInstance {
         }
     }
 
-    private func processPayload(_ payload: GossipPayload) {
+    private func processPayload(_ payload: GossipPayload) async {
         for update in payload.updates {
             // Check if this is about us
             if update.memberID == localMember.id {
@@ -624,40 +751,88 @@ public actor SWIMInstance {
             }
 
             let member = update.toMember()
-            if let change = memberList.update(member) {
-                switch change {
-                case .joined(let m):
-                    eventContinuation.yield(.memberJoined(m))
-                case .statusChanged(let m, let from):
-                    switch m.status {
-                    case .alive:
-                        if from == .suspect {
-                            eventContinuation.yield(.memberRecovered(m))
-                        }
-                    case .suspect:
-                        eventContinuation.yield(.memberSuspected(m))
-                    case .dead:
-                        eventContinuation.yield(.memberFailed(m))
-                    }
-                case .left(let id):
-                    eventContinuation.yield(.memberLeft(id))
-                }
 
-                // Re-disseminate
-                disseminator.enqueue(update)
+            // Apply through the trust boundary: implausible incarnation jumps or
+            // table-overflow joins are rejected and surfaced, never silently
+            // trusted.
+            let change: MembershipChange?
+            do {
+                change = try memberList.applyGossip(
+                    member,
+                    maxIncarnationDelta: config.maxIncarnationDelta,
+                    maxMemberCount: config.maxMemberCount
+                )
+            } catch let rejection as MemberListRejection {
+                eventContinuation.yield(.error(.protocolError(
+                    "Rejected gossip: \(rejection)"
+                )))
+                continue
+            } catch {
+                eventContinuation.yield(.error(.protocolError(
+                    "Rejected gossip: \(error)"
+                )))
+                continue
             }
+
+            guard let change else { continue }
+
+            switch change {
+            case .joined(let m):
+                eventContinuation.yield(.memberJoined(m))
+            case .statusChanged(let m, let from):
+                switch m.status {
+                case .alive:
+                    if from == .suspect {
+                        // Centralized recovery: a gossiped alive+higher-incarnation
+                        // refutes a local suspicion, so cancel any running
+                        // suspicion timer before it can fire a stale kill.
+                        await cancelSuspicion(for: m.id)
+                        eventContinuation.yield(.memberRecovered(m))
+                    }
+                case .suspect:
+                    eventContinuation.yield(.memberSuspected(m))
+                case .dead:
+                    // A gossiped death also ends any local suspicion tracking.
+                    await cancelSuspicion(for: m.id)
+                    eventContinuation.yield(.memberFailed(m))
+                }
+            case .left(let id):
+                eventContinuation.yield(.memberLeft(id))
+            }
+
+            // Re-disseminate
+            disseminator.enqueue(update)
         }
     }
 
     private func handleUpdateAboutSelf(_ update: MembershipUpdate) {
-        // If someone says we're suspect or dead, refute by incrementing incarnation
-        if update.status != .alive && update.incarnation >= localMember.incarnation {
-            localMember.incarnation = update.incarnation.incremented()
-            eventContinuation.yield(.incarnationIncremented(localMember.incarnation))
-
-            // Disseminate our new incarnation
-            disseminator.enqueue(member: localMember)
-            memberList.update(localMember)
+        // Someone reports us as suspect or dead. Refute by advancing our own
+        // incarnation. Treat the local incarnation as our monotonic counter:
+        // never decrease it, and out-pace the (possibly forged) accuser by basing
+        // the new value on max(local, reported). This prevents an attacker who
+        // forged a huge incarnation from permanently out-running our refutation.
+        guard update.status != .alive, update.incarnation >= localMember.incarnation else {
+            return
         }
+
+        let base = Swift.max(localMember.incarnation, update.incarnation)
+        let refuted = base.incremented()
+
+        // If the logical clock is already saturated, the refutation cannot
+        // strictly out-rank the accusation. Surface this rather than silently
+        // emitting a no-op refutation.
+        guard refuted > localMember.incarnation else {
+            eventContinuation.yield(.error(.protocolError(
+                "Incarnation saturated; cannot refute accusation at \(update.incarnation.value)"
+            )))
+            return
+        }
+
+        localMember.incarnation = refuted
+        eventContinuation.yield(.incarnationIncremented(localMember.incarnation))
+
+        // Disseminate our new incarnation and reflect it locally.
+        disseminator.enqueue(member: localMember)
+        memberList.update(localMember)
     }
 }

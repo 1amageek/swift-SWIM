@@ -220,37 +220,130 @@ public final class MemberList: Sendable {
     public func update(_ member: Member) -> MembershipChange? {
         state.withLock { state in
             if let existing = state.members[member.id] {
-                // Apply update rules
-                if !Self.shouldApplyUpdate(existing: existing, update: member) {
-                    return nil
-                }
-
-                let previousStatus = existing.status
-                state.members[member.id] = member
-                Self.updateStatusSets(&state, for: member, previousStatus: previousStatus)
-
-                // Track dead timestamp for GC (learned via gossip)
-                if member.status == .dead && previousStatus != .dead {
-                    state.deadTimestamps[member.id] = .now
-                }
-                // Clear dead timestamp if member recovered
-                if member.status != .dead && previousStatus == .dead {
-                    state.deadTimestamps.removeValue(forKey: member.id)
-                }
-
-                if previousStatus != member.status {
-                    return .statusChanged(member, from: previousStatus)
-                }
-                return nil
+                return Self.applyExistingUpdate(&state, member: member, existing: existing)
             } else {
-                // New member
-                state.members[member.id] = member
-                Self.updateStatusSets(&state, for: member)
-                // Track dead timestamp for new dead members (learned via gossip)
-                if member.status == .dead {
-                    state.deadTimestamps[member.id] = .now
+                return Self.insertNewMember(&state, member: member)
+            }
+        }
+    }
+
+    /// Applies an update for an already-known member, enforcing precedence rules.
+    ///
+    /// Must be called while holding the state lock.
+    private static func applyExistingUpdate(
+        _ state: inout State,
+        member: Member,
+        existing: Member
+    ) -> MembershipChange? {
+        // Apply update rules
+        guard shouldApplyUpdate(existing: existing, update: member) else {
+            return nil
+        }
+
+        let previousStatus = existing.status
+        state.members[member.id] = member
+        updateStatusSets(&state, for: member, previousStatus: previousStatus)
+
+        // Track dead timestamp for GC (learned via gossip)
+        if member.status == .dead && previousStatus != .dead {
+            state.deadTimestamps[member.id] = .now
+        }
+        // Clear dead timestamp if member recovered
+        if member.status != .dead && previousStatus == .dead {
+            state.deadTimestamps.removeValue(forKey: member.id)
+        }
+
+        if previousStatus != member.status {
+            return .statusChanged(member, from: previousStatus)
+        }
+        return nil
+    }
+
+    /// Inserts a brand-new member.
+    ///
+    /// Must be called while holding the state lock.
+    private static func insertNewMember(
+        _ state: inout State,
+        member: Member
+    ) -> MembershipChange? {
+        state.members[member.id] = member
+        updateStatusSets(&state, for: member)
+        // Track dead timestamp for new dead members (learned via gossip)
+        if member.status == .dead {
+            state.deadTimestamps[member.id] = .now
+        }
+        return .joined(member)
+    }
+
+    /// Applies a gossiped member update through the trust boundary.
+    ///
+    /// Unlike ``update(_:)`` (which trusts its input completely and is used for
+    /// locally-originated state), this variant enforces the sanity bounds that
+    /// make the trust boundary explicit for *unauthenticated* gossip:
+    ///
+    /// 1. **Incarnation jump bound** — rejects an update whose incarnation is
+    ///    further than `maxIncarnationDelta` ahead of the locally known
+    ///    incarnation. A forged, implausibly high incarnation would otherwise win
+    ///    every conflict and could mark any member dead or make a peer
+    ///    undetectable.
+    /// 2. **Member-table cap** — rejects admitting a brand-new member once the
+    ///    table holds `maxMemberCount` members, bounding memory growth from a
+    ///    flood of forged `alive` members (GC only reclaims dead members).
+    ///
+    /// Rejections are surfaced as ``MemberListRejection`` rather than silently
+    /// dropped, so the caller can decide how to react.
+    ///
+    /// - Parameters:
+    ///   - member: The gossiped member state to apply.
+    ///   - maxIncarnationDelta: Maximum allowed forward incarnation delta. Pass
+    ///     `nil` to disable the bound.
+    ///   - maxMemberCount: Maximum member-table size. Pass `nil` to disable the cap.
+    /// - Returns: The membership change if the update was applied, or `nil` if it
+    ///   was superseded by existing state.
+    /// - Throws: ``MemberListRejection`` if a sanity bound is violated.
+    @discardableResult
+    public func applyGossip(
+        _ member: Member,
+        maxIncarnationDelta: UInt64?,
+        maxMemberCount: Int?
+    ) throws -> MembershipChange? {
+        try state.withLock { state in
+            if let existing = state.members[member.id] {
+                // Sanity bound only applies to forward jumps. A non-advancing
+                // update can never inflate the logical clock, so it is harmless
+                // here and will be filtered by the normal precedence rules below.
+                if let maxDelta = maxIncarnationDelta,
+                   member.incarnation > existing.incarnation {
+                    let delta = member.incarnation.value - existing.incarnation.value
+                    if delta > maxDelta {
+                        throw MemberListRejection.incarnationJumpTooLarge(
+                            memberID: member.id,
+                            known: existing.incarnation,
+                            proposed: member.incarnation,
+                            maxDelta: maxDelta
+                        )
+                    }
                 }
-                return .joined(member)
+                return Self.applyExistingUpdate(&state, member: member, existing: existing)
+            } else {
+                // New member: enforce the absolute incarnation bound (a fresh
+                // member is "known" at .initial) and the table-size cap.
+                if let maxDelta = maxIncarnationDelta,
+                   member.incarnation.value > maxDelta {
+                    throw MemberListRejection.incarnationJumpTooLarge(
+                        memberID: member.id,
+                        known: .initial,
+                        proposed: member.incarnation,
+                        maxDelta: maxDelta
+                    )
+                }
+                if let limit = maxMemberCount, state.members.count >= limit {
+                    throw MemberListRejection.memberTableFull(
+                        memberID: member.id,
+                        limit: limit
+                    )
+                }
+                return Self.insertNewMember(&state, member: member)
             }
         }
     }
@@ -291,20 +384,36 @@ public final class MemberList: Sendable {
         }
     }
 
-    /// Marks a member as dead.
+    /// Marks a suspected member as dead because its suspicion timeout expired.
     ///
-    /// Only applies if the incarnation matches or is older.
+    /// This is the *kill* path driven by the suspicion timer. To preserve the
+    /// core SWIM safety property — "a node that refutes a suspicion must not be
+    /// declared dead" — the kill only applies when the member is **still**
+    /// `.suspect` at the **exact** incarnation captured when suspicion started.
+    ///
+    /// Any refutation in the meantime (the member transitions to `.alive` and/or
+    /// bumps its incarnation) changes either the status or the incarnation, which
+    /// invalidates the pending kill via strict equality. A stale "dead at N"
+    /// therefore cannot kill a member that is currently alive at N, and an
+    /// already-refuted member is never killed by an old timer.
+    ///
+    /// - Parameters:
+    ///   - id: The member to mark dead.
+    ///   - incarnation: The incarnation captured when suspicion started.
+    /// - Returns: The membership change if the kill applied, otherwise `nil`.
     @discardableResult
     public func markDead(_ id: MemberID, incarnation: Incarnation) -> MembershipChange? {
         state.withLock { state in
             guard var member = state.members[id] else { return nil }
-            guard member.incarnation <= incarnation else { return nil }
+            // Strict precondition: still suspect AND exact captured incarnation.
+            // Any refutation (status -> .alive or incarnation bump) invalidates
+            // this pending kill.
+            guard member.status == .suspect, member.incarnation == incarnation else {
+                return nil
+            }
 
             let previousStatus = member.status
-            if previousStatus == .dead { return nil }
-
             member.status = .dead
-            member.incarnation = incarnation
             state.members[id] = member
             Self.updateStatusSets(&state, for: member, previousStatus: previousStatus)
 

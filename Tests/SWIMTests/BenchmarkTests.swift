@@ -12,7 +12,7 @@ struct BenchmarkTests {
     // MARK: - Encoding Benchmarks
 
     @Test("Benchmark: Encode ping message")
-    func benchmarkEncodePing() {
+    func benchmarkEncodePing() throws {
         let payload = GossipPayload.empty
         let message = SWIMMessage.ping(sequenceNumber: 12345, payload: payload)
 
@@ -20,7 +20,7 @@ struct BenchmarkTests {
         let start = ContinuousClock.now
 
         for _ in 0..<iterations {
-            _ = SWIMMessageCodec.encode(message)
+            _ = try SWIMMessageCodec.encode(message)
         }
 
         let elapsed = ContinuousClock.now - start
@@ -31,7 +31,7 @@ struct BenchmarkTests {
     }
 
     @Test("Benchmark: Encode ping with payload")
-    func benchmarkEncodePingWithPayload() {
+    func benchmarkEncodePingWithPayload() throws {
         let updates = (0..<5).map { i in
             MembershipUpdate(
                 member: Member(
@@ -48,7 +48,7 @@ struct BenchmarkTests {
         let start = ContinuousClock.now
 
         for _ in 0..<iterations {
-            _ = SWIMMessageCodec.encode(message)
+            _ = try SWIMMessageCodec.encode(message)
         }
 
         let elapsed = ContinuousClock.now - start
@@ -59,7 +59,7 @@ struct BenchmarkTests {
     }
 
     @Test("Benchmark: Encode to bytes vs Data")
-    func benchmarkEncodeToBytes() {
+    func benchmarkEncodeToBytes() throws {
         let payload = GossipPayload.empty
         let message = SWIMMessage.ping(sequenceNumber: 12345, payload: payload)
 
@@ -68,14 +68,14 @@ struct BenchmarkTests {
         // Benchmark encode to Data
         let startData = ContinuousClock.now
         for _ in 0..<iterations {
-            _ = SWIMMessageCodec.encode(message)
+            _ = try SWIMMessageCodec.encode(message)
         }
         let elapsedData = ContinuousClock.now - startData
 
         // Benchmark encode to bytes
         let startBytes = ContinuousClock.now
         for _ in 0..<iterations {
-            _ = SWIMMessageCodec.encodeToBytes(message)
+            _ = try SWIMMessageCodec.encodeToBytes(message)
         }
         let elapsedBytes = ContinuousClock.now - startBytes
 
@@ -89,7 +89,7 @@ struct BenchmarkTests {
     func benchmarkDecodePing() throws {
         let payload = GossipPayload.empty
         let message = SWIMMessage.ping(sequenceNumber: 12345, payload: payload)
-        let data = SWIMMessageCodec.encode(message)
+        let data = try SWIMMessageCodec.encode(message)
 
         let iterations = 100_000
         let start = ContinuousClock.now
@@ -118,7 +118,7 @@ struct BenchmarkTests {
         }
         let payload = GossipPayload(updates: updates)
         let message = SWIMMessage.ping(sequenceNumber: 12345, payload: payload)
-        let data = SWIMMessageCodec.encode(message)
+        let data = try SWIMMessageCodec.encode(message)
 
         let iterations = 50_000
         let start = ContinuousClock.now
@@ -138,8 +138,8 @@ struct BenchmarkTests {
     func benchmarkDecodeFromBytes() throws {
         let payload = GossipPayload.empty
         let message = SWIMMessage.ping(sequenceNumber: 12345, payload: payload)
-        let data = SWIMMessageCodec.encode(message)
-        let bytes = SWIMMessageCodec.encodeToBytes(message)
+        let data = try SWIMMessageCodec.encode(message)
+        let bytes = try SWIMMessageCodec.encodeToBytes(message)
 
         let iterations = 100_000
 
@@ -181,7 +181,7 @@ struct BenchmarkTests {
         let start = ContinuousClock.now
 
         for _ in 0..<iterations {
-            let data = SWIMMessageCodec.encode(original)
+            let data = try SWIMMessageCodec.encode(original)
             _ = try SWIMMessageCodec.decode(data)
         }
 

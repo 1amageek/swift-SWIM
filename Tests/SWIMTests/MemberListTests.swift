@@ -303,7 +303,11 @@ struct MemberListTests {
         list.update(member1)
         list.update(member2)
 
-        // Mark as dead
+        // Mark as dead via the legitimate suspect -> dead lifecycle. markDead is
+        // the suspicion-timer kill path and only applies to still-suspect members
+        // at the captured incarnation.
+        list.markSuspect(member1.id, incarnation: .initial)
+        list.markSuspect(member2.id, incarnation: .initial)
         list.markDead(member1.id, incarnation: .initial)
         list.markDead(member2.id, incarnation: .initial)
 
@@ -325,6 +329,7 @@ struct MemberListTests {
         let member = Member(id: MemberID(id: "node1", address: "127.0.0.1:8001"))
 
         list.update(member)
+        list.markSuspect(member.id, incarnation: .initial)
         list.markDead(member.id, incarnation: .initial)
 
         // Try to remove immediately (retention period not passed)
@@ -346,6 +351,7 @@ struct MemberListTests {
         list.update(dead)
 
         list.markSuspect(suspect.id, incarnation: .initial)
+        list.markSuspect(dead.id, incarnation: .initial)
         list.markDead(dead.id, incarnation: .initial)
 
         try await Task.sleep(for: .milliseconds(50))
@@ -473,6 +479,7 @@ struct MemberListTests {
 
         list.update(alive)
         list.update(dead)
+        list.markSuspect(dead.id, incarnation: .initial)
         list.markDead(dead.id, incarnation: .initial)
 
         var targets: Set<MemberID> = []

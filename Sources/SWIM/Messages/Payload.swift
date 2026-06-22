@@ -64,9 +64,11 @@ public struct MembershipUpdate: Sendable, Hashable {
     }
 
     /// Encodes the membership update to a write buffer.
+    ///
+    /// - Throws: ``SWIMCodecError/stringTooLong(byteCount:)`` via the member ID.
     @inlinable
-    public func encode(to buffer: inout WriteBuffer) {
-        memberID.encode(to: &buffer)
+    public func encode(to buffer: inout WriteBuffer) throws {
+        try memberID.encode(to: &buffer)
         status.encode(to: &buffer)
         incarnation.encode(to: &buffer)
     }
@@ -132,12 +134,25 @@ public struct GossipPayload: Sendable, Hashable {
         updates.count
     }
 
+    /// Minimum on-wire size, in bytes, of a single encoded ``MembershipUpdate``.
+    ///
+    /// Used to bound a decoder's pre-allocation against the bytes actually
+    /// remaining in the buffer. Layout:
+    /// - member ID: id length (2) + address length (2), each with zero-length
+    ///   strings is the minimum,
+    /// - status (1),
+    /// - incarnation (8).
+    @usableFromInline
+    static let minimumEncodedUpdateSize = 2 + 2 + 1 + 8
+
     /// Encodes the gossip payload to a write buffer.
+    ///
+    /// - Throws: ``SWIMCodecError/stringTooLong(byteCount:)`` via member IDs.
     @inlinable
-    public func encode(to buffer: inout WriteBuffer) {
+    public func encode(to buffer: inout WriteBuffer) throws {
         buffer.writeUInt16(UInt16(updates.count))
         for update in updates {
-            update.encode(to: &buffer)
+            try update.encode(to: &buffer)
         }
     }
 
@@ -151,8 +166,18 @@ public struct GossipPayload: Sendable, Hashable {
         let count = Int(buffer.readUInt16(at: offset))
         offset += 2
 
+        // Cap the reservation against the bytes actually remaining: an
+        // attacker-controlled `count` (up to 65535) must not drive a large
+        // pre-allocation on a short buffer. Each update needs at least
+        // `minimumEncodedUpdateSize` bytes, so the buffer cannot hold more than
+        // remainingBytes / minimumEncodedUpdateSize updates regardless of the
+        // header.
+        let remainingBytes = max(0, buffer.count - offset)
+        let maxPossibleUpdates = remainingBytes / minimumEncodedUpdateSize
+        let safeCapacity = min(count, maxPossibleUpdates)
+
         var updates: [MembershipUpdate] = []
-        updates.reserveCapacity(count)
+        updates.reserveCapacity(safeCapacity)
 
         for _ in 0..<count {
             guard let update = MembershipUpdate.decode(from: buffer, at: &offset) else {

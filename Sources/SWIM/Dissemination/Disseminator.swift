@@ -12,21 +12,45 @@ import Synchronization
 public final class Disseminator: Sendable {
     private let state: Mutex<DisseminationState>
     private let maxPayloadSize: Int
-    private let disseminationLimit: Int
 
     private struct DisseminationState: Sendable {
         var queue: BroadcastQueue
+        /// Number of times to send each update.
+        ///
+        /// This must grow with `log(N)` as the cluster grows, so it lives in the
+        /// mutable state rather than being fixed at init. Otherwise large
+        /// clusters would under-disseminate (each update dropped after too few
+        /// sends to reach everyone).
+        var disseminationLimit: Int
     }
 
     /// Creates a new disseminator.
     ///
     /// - Parameters:
     ///   - maxPayloadSize: Maximum number of updates per message
-    ///   - disseminationLimit: Number of times to send each update
+    ///   - disseminationLimit: Initial number of times to send each update
     public init(maxPayloadSize: Int = 10, disseminationLimit: Int = 6) {
         self.maxPayloadSize = maxPayloadSize
-        self.disseminationLimit = disseminationLimit
-        self.state = Mutex(DisseminationState(queue: BroadcastQueue()))
+        self.state = Mutex(
+            DisseminationState(queue: BroadcastQueue(), disseminationLimit: disseminationLimit)
+        )
+    }
+
+    /// Updates the dissemination limit to reflect the current cluster size.
+    ///
+    /// Call this when the member count changes so each update is piggybacked
+    /// enough times to reach the whole (grown) cluster.
+    ///
+    /// - Parameter newLimit: The recomputed limit (must be at least 1).
+    public func updateDisseminationLimit(_ newLimit: Int) {
+        state.withLock { state in
+            state.disseminationLimit = Swift.max(1, newLimit)
+        }
+    }
+
+    /// The current dissemination limit.
+    public var disseminationLimit: Int {
+        state.withLock { $0.disseminationLimit }
     }
 
     // MARK: - Enqueue Updates
@@ -79,7 +103,7 @@ public final class Disseminator: Sendable {
             state.queue.incrementDisseminationCount(for: memberIDs)
 
             // Remove expired updates
-            state.queue.removeExpired(limit: disseminationLimit)
+            state.queue.removeExpired(limit: state.disseminationLimit)
 
             return GossipPayload(updates: updates)
         }

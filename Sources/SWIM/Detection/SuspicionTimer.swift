@@ -9,11 +9,20 @@ import Foundation
 /// When a member becomes suspect, a timer is started. If the member
 /// doesn't prove itself alive before the timer expires, it's marked dead.
 public actor SuspicionTimer {
-    private var suspicionTasks: [MemberID: Task<Void, Never>]
+    /// An active suspicion: the timer task plus the incarnation captured when
+    /// suspicion started. The captured incarnation is used by the kill path to
+    /// enforce that only a *still-suspect, same-incarnation* member can be marked
+    /// dead, so any refutation invalidates the pending kill.
+    private struct Suspicion {
+        let task: Task<Void, Never>
+        let incarnation: Incarnation
+    }
+
+    private var suspicions: [MemberID: Suspicion]
 
     /// Creates a new suspicion timer.
     public init() {
-        self.suspicionTasks = [:]
+        self.suspicions = [:]
     }
 
     /// Starts a suspicion timer for a member.
@@ -22,28 +31,33 @@ public actor SuspicionTimer {
     ///
     /// - Parameters:
     ///   - member: The member to track
+    ///   - incarnation: The member's incarnation captured at suspicion start. It
+    ///     is passed back to `onExpired` so the kill path can require strict
+    ///     equality (any refutation bumps the incarnation and invalidates the kill).
     ///   - timeout: How long to wait before declaring the member dead
-    ///   - onExpired: Callback invoked when the timer expires
+    ///   - onExpired: Callback invoked with the captured incarnation when the
+    ///     timer expires (i.e. the member was never refuted).
     public func startSuspicion(
         for member: MemberID,
+        incarnation: Incarnation,
         timeout: Duration,
-        onExpired: @Sendable @escaping () -> Void
+        onExpired: @Sendable @escaping (Incarnation) -> Void
     ) {
         // Cancel existing timer if any
-        suspicionTasks[member]?.cancel()
+        suspicions[member]?.task.cancel()
 
         // Start new timer
         let task = Task {
             do {
                 try await Task.sleep(for: timeout)
-                // Timer expired, call callback
-                onExpired()
+                // Timer expired (not refuted): invoke kill with captured incarnation.
+                onExpired(incarnation)
             } catch {
-                // Task was cancelled, do nothing
+                // Task was cancelled (member refuted), do nothing.
             }
         }
 
-        suspicionTasks[member] = task
+        suspicions[member] = Suspicion(task: task, incarnation: incarnation)
     }
 
     /// Cancels the suspicion timer for a member.
@@ -53,8 +67,8 @@ public actor SuspicionTimer {
     ///
     /// - Parameter member: The member whose timer to cancel
     public func cancelSuspicion(for member: MemberID) {
-        suspicionTasks[member]?.cancel()
-        suspicionTasks.removeValue(forKey: member)
+        suspicions[member]?.task.cancel()
+        suspicions.removeValue(forKey: member)
     }
 
     /// Checks if a member is currently under suspicion.
@@ -62,22 +76,22 @@ public actor SuspicionTimer {
     /// - Parameter member: The member to check
     /// - Returns: True if there's an active suspicion timer for this member
     public func isSuspect(_ member: MemberID) -> Bool {
-        if let task = suspicionTasks[member] {
-            return !task.isCancelled
+        if let suspicion = suspicions[member] {
+            return !suspicion.task.isCancelled
         }
         return false
     }
 
     /// Cancels all active suspicion timers.
     public func cancelAll() {
-        for (_, task) in suspicionTasks {
-            task.cancel()
+        for (_, suspicion) in suspicions {
+            suspicion.task.cancel()
         }
-        suspicionTasks.removeAll()
+        suspicions.removeAll()
     }
 
     /// Returns the number of active suspicion timers.
     public var activeSuspicionCount: Int {
-        suspicionTasks.count
+        suspicions.count
     }
 }
