@@ -25,7 +25,7 @@ SWIM is a protocol for membership management and failure detection in large-scal
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/1amageek/swift-SWIM.git", from: "1.0.0")
+    .package(url: "https://github.com/1amageek/swift-SWIM.git", from: "1.2.0")
 ]
 ```
 
@@ -82,8 +82,9 @@ Sources/SWIM/
 ├── Core/                      # Core types
 │   ├── Member.swift           # MemberID, Member
 │   ├── MemberStatus.swift     # Alive/Suspect/Dead
-│   ├── Incarnation.swift      # Incarnation numbers
-│   └── MemberList.swift       # Thread-safe member list
+│   ├── Incarnation.swift      # Incarnation numbers (saturating)
+│   ├── MemberList.swift       # Thread-safe member list
+│   └── MemberListError.swift  # Trust-boundary rejections
 │
 ├── Messages/                  # Protocol messages
 │   ├── Message.swift          # SWIMMessage (Ping/PingReq/Ack/Nack)
@@ -104,6 +105,9 @@ Sources/SWIM/
 │   ├── SWIMInstance.swift     # SWIM actor
 │   ├── SWIMConfiguration.swift # Configuration
 │   └── SWIMEvent.swift        # Events
+│
+├── Security/                  # Security
+│   └── SWIMMessageAuthenticator.swift # Optional message-authentication hook
 │
 └── Transport/                 # Transport
     └── SWIMTransport.swift    # Protocol + mock implementation
@@ -186,20 +190,28 @@ final class UDPTransport: SWIMTransport, Sendable {
         // Start receiving
         Task {
             for await (data, address) in socket.incoming {
-                if let message = try? SWIMMessageCodec.decode(data) {
+                do {
+                    let message = try SWIMMessageCodec.decode(data)
                     let sender = MemberID(id: address, address: address)
                     continuation.yield((message, sender))
+                } catch {
+                    // Drop undecodable datagrams; do not swallow silently in production.
+                    continue
                 }
             }
         }
     }
 
     func send(_ message: SWIMMessage, to member: MemberID) async throws {
-        let data = SWIMMessageCodec.encode(message)
+        let data = try SWIMMessageCodec.encode(message)
         try await socket.send(data, to: member.address)
     }
 }
 ```
+
+> `SWIMMessageCodec.encode` (and `encodeToBytes`) now `throw`. They surface a
+> typed `SWIMCodecError` (e.g. `.stringTooLong`) instead of trapping, so an
+> over-long identifier or address cannot crash the encoder.
 
 ## Configuration
 
@@ -223,7 +235,60 @@ config.maxPayloadSize = 10
 
 // Base dissemination count (actual = base * log(N))
 config.baseDisseminationLimit = 3
+
+// Maximum plausible forward jump in a gossiped incarnation.
+// Gossip whose incarnation is more than this many steps ahead of the
+// locally known value is rejected (MemberListRejection.incarnationJumpTooLarge)
+// rather than silently trusted. Default: 16
+config.maxIncarnationDelta = 16
+
+// Maximum number of members the table will hold. Bounds memory growth from a
+// flood of (potentially forged) members. Joins beyond this cap are rejected
+// (MemberListRejection.memberTableFull). Default: 10000
+config.maxMemberCount = 10_000
+
+// Optional message authenticator (see "Security" below). Default: nil
+// config.authenticator = MyAuthenticator()
 ```
+
+## Security
+
+SWIM is, by default, an **unauthenticated** gossip protocol: any peer that can
+reach the cluster can forge membership updates (e.g. claim a higher incarnation
+to mark a member dead, or to make itself undetectable). swift-SWIM adds the
+following defenses:
+
+- **Refutation safety**: A refuted or recovered member is never erroneously
+  marked dead. The suspicion-kill path requires the *exact* incarnation captured
+  when suspicion started, and every recovery route (direct ack, gossiped
+  recovery, self-refutation) cancels the running suspicion timer so it can never
+  fire a stale kill.
+- **Saturating incarnations**: Incarnation numbers saturate at `UInt64.max`
+  instead of wrapping, so a logical clock can never roll back and let stale
+  state out-rank newer state. Saturation is observable via `Incarnation.isSaturated`.
+- **Heuristic sanity bounds**: `maxIncarnationDelta` rejects implausibly large
+  incarnation jumps and `maxMemberCount` caps the member table. Rejections are
+  surfaced as typed `MemberListRejection` errors, never silently dropped.
+- **Optional message authentication**: Conform to `SWIMMessageAuthenticator`
+  and inject it via `SWIMConfiguration.authenticator`. When set, outgoing
+  messages are signed (`sign(message:)`) and incoming messages are verified
+  (`verify(message:)`) before their gossip is trusted; unverifiable datagrams
+  are rejected.
+
+```swift
+struct MyAuthenticator: SWIMMessageAuthenticator {
+    func sign(message: SWIMMessage) throws -> [UInt8] { /* compute MAC */ }
+    func verify(message: SWIMMessage) -> Bool { /* check MAC */ }
+}
+
+var config = SWIMConfiguration()
+config.authenticator = MyAuthenticator()
+```
+
+> **Residual limitation**: Without an authenticator, SWIM trusts unauthenticated
+> wire data. The `maxIncarnationDelta` and `maxMemberCount` bounds are heuristic
+> sanity limits, **not** authentication. For real protection against forged
+> gossip, configure an `authenticator`.
 
 ## Core Types
 
@@ -238,6 +303,10 @@ config.baseDisseminationLimit = 3
 | `GossipPayload` | Updates piggybacked on messages |
 | `SWIMInstance` | Main protocol instance (actor) |
 | `SWIMTransport` | Network transport protocol |
+| `SWIMConfiguration` | Protocol parameters and trust bounds |
+| `SWIMMessageAuthenticator` | Optional message-authentication hook |
+| `MemberListRejection` | Typed reasons a gossiped update is rejected |
+| `SWIMCodecError` | Typed encode/decode errors |
 
 ## Testing
 
