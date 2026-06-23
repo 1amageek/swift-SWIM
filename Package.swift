@@ -40,7 +40,13 @@ let package = Package(
         ),
     ],
     dependencies: [
-        .package(url: "https://github.com/1amageek/swift-nio-udp.git", from: "1.1.2"),
+        // embedded-branch only; restore URL before release.
+        // Local path so the whole embedded composition (swift-libp2p pulls quic +
+        // SWIM + mDNS + nio-udp together) resolves nio-udp against ONE working tree.
+        // A URL pin here collides with swift-libp2p's local-path nio-udp and trips
+        // SwiftPM's "Conflicting identity for swift-nio-udp" diagnostic (escalating
+        // to an error in future SwiftPM). Original: .package(url: "https://github.com/1amageek/swift-nio-udp.git", from: "1.1.2")
+        .package(path: "../swift-nio-udp"),
     ],
     targets: [
         // Embedded-clean SWIM gossip codec + membership value/safety types.
