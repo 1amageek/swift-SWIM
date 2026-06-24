@@ -4,6 +4,7 @@
 
 import Foundation
 import SWIM
+import SWIMWire
 import NIOUDPTransport
 import NIOCore
 import Synchronization
@@ -33,7 +34,7 @@ private let swimUDPTransportLogger = Logger(
 /// let transport = SWIMUDPTransport(port: 7946)
 /// try await transport.start()
 ///
-/// let swim = SWIMInstance(
+/// let swim = SWIMCluster(
 ///     localMember: Member(id: MemberID(id: "node1", address: transport.localAddress)),
 ///     config: .default,
 ///     transport: transport

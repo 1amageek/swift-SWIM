@@ -3,6 +3,7 @@
 /// Manages suspicion timeouts for members in the suspect state.
 
 import Foundation
+import SWIMWire
 
 /// Manages suspicion timeouts.
 ///

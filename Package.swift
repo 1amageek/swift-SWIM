@@ -2,10 +2,10 @@
 
 import PackageDescription
 
-// Embedded toggle: `SWIMCore` dual-builds (host + Embedded). The Embedded build
-// is `P2P_CORE_EMBEDDED=1 swiftly run +6.3.1 swift build --target SWIMCore`.
+// Embedded toggle: `SWIMWire` dual-builds (host + Embedded). The Embedded build
+// is `P2P_CORE_EMBEDDED=1 swiftly run +6.3.1 swift build --target SWIMWire`.
 // `Lifetimes` is enabled in both modes for parity with the shared p2p-core
-// recipe (SWIMCore itself has no Span-returning members today).
+// recipe (SWIMWire itself has no Span-returning members today).
 let embeddedEnabled = Context.environment["P2P_CORE_EMBEDDED"] == "1"
 
 let coreSettings: [SwiftSetting] = {
@@ -31,8 +31,8 @@ let package = Package(
             targets: ["SWIM"]
         ),
         .library(
-            name: "SWIMCore",
-            targets: ["SWIMCore"]
+            name: "SWIMWire",
+            targets: ["SWIMWire"]
         ),
         .library(
             name: "SWIMTransportUDP",
@@ -49,34 +49,41 @@ let package = Package(
         .package(path: "../swift-nio-udp"),
     ],
     targets: [
-        // Embedded-clean SWIM gossip codec + membership value/safety types.
+        // Tier-3 codec core (renamed from SWIMCore). Embedded-clean SWIM gossip
+        // codec + membership value/safety types.
         //
         // No Foundation, no 'any', typed throws. NOTE: the Mutex/ContinuousClock
         // -backed membership state machine (MemberList/Disseminator/BroadcastQueue)
-        // and the orchestration actor (SWIMInstance) stay in the SWIM target —
+        // and the orchestration actor (SWIMCluster) stay in the SWIM target —
         // Synchronization's Mutex and stdlib ContinuousClock are NOT available
-        // under Embedded Swift 6.3.1.
+        // under Embedded Swift 6.3.1. `import SWIM` does NOT pull this in; a
+        // protocol implementer imports SWIMWire deliberately.
         .target(
-            name: "SWIMCore",
-            path: "Sources/SWIMCore",
+            name: "SWIMWire",
+            path: "Sources/SWIMWire",
             swiftSettings: coreSettings
         ),
 
-        // Host-facing SWIM library (orchestration + state machine + Foundation
-        // bridges). '@_exported import SWIMCore' so existing `import SWIM`
-        // call sites resolve the cored types unchanged.
+        // Tier-1 facade (orchestration + state machine + Foundation bridges).
+        // Re-exports only the curated facade value types from SWIMWire
+        // (Member/MemberID/MemberStatus/Incarnation) via symbol-level
+        // @_exported import; it does NOT re-export the codec (SWIMMessageCodec,
+        // WriteBuffer, SWIMMessage, GossipPayload, ...) — those need an explicit
+        // `import SWIMWire`.
         .target(
             name: "SWIM",
-            dependencies: ["SWIMCore"],
+            dependencies: ["SWIMWire"],
             path: "Sources/SWIM",
             exclude: ["CONTEXT.md"]
         ),
 
-        // UDP Transport using swift-nio-udp
+        // UDP Transport using swift-nio-udp. Depends on SWIMWire directly for the
+        // codec (SWIMMessageCodec) — `import SWIM` no longer re-exports it.
         .target(
             name: "SWIMTransportUDP",
             dependencies: [
                 "SWIM",
+                "SWIMWire",
                 .product(name: "NIOUDPTransport", package: "swift-nio-udp"),
             ],
             path: "Sources/SWIMTransportUDP"
@@ -85,7 +92,7 @@ let package = Package(
         // Tests
         .testTarget(
             name: "SWIMTests",
-            dependencies: ["SWIM"],
+            dependencies: ["SWIM", "SWIMWire"],
             path: "Tests/SWIMTests"
         ),
         .testTarget(

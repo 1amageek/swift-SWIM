@@ -3,6 +3,7 @@
 import Foundation
 import Testing
 @testable import SWIM
+import SWIMWire
 
 @Suite("MessageCodec Tests")
 struct MessageCodecTests {

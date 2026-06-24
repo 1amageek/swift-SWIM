@@ -20,7 +20,7 @@ struct SWIMTrustBoundaryTests {
     }
 
     private func collectError(
-        from instance: SWIMInstance,
+        from instance: SWIMCluster,
         matching predicate: @escaping @Sendable (SWIMError) -> Bool
     ) -> Task<Bool, Never> {
         Task {
@@ -45,7 +45,7 @@ struct SWIMTrustBoundaryTests {
         config.protocolPeriod = .seconds(3600)
         let transport = MockTransport(localAddress: "127.0.0.1:8000")
         let localID = MemberID(id: "node1", address: "127.0.0.1:8000")
-        let instance = SWIMInstance(localMember: Member(id: localID), config: config, transport: transport)
+        let instance = SWIMCluster(localMember: Member(id: localID), config: config, transport: transport)
         await instance.start()
 
         let errorTask = collectError(from: instance) { error in
@@ -91,7 +91,7 @@ struct SWIMTrustBoundaryTests {
         config.authenticator = FixedAuthenticator(accept: false)
         let transport = MockTransport(localAddress: "127.0.0.1:8000")
         let localID = MemberID(id: "node1", address: "127.0.0.1:8000")
-        let instance = SWIMInstance(localMember: Member(id: localID), config: config, transport: transport)
+        let instance = SWIMCluster(localMember: Member(id: localID), config: config, transport: transport)
         await instance.start()
 
         let errorTask = collectError(from: instance) { error in
@@ -123,7 +123,7 @@ struct SWIMTrustBoundaryTests {
         config.authenticator = FixedAuthenticator(accept: true)
         let transport = MockTransport(localAddress: "127.0.0.1:8000")
         let localID = MemberID(id: "node1", address: "127.0.0.1:8000")
-        let instance = SWIMInstance(localMember: Member(id: localID), config: config, transport: transport)
+        let instance = SWIMCluster(localMember: Member(id: localID), config: config, transport: transport)
         await instance.start()
 
         let peerID = MemberID(id: "node2", address: "127.0.0.1:8001")
@@ -148,7 +148,7 @@ struct SWIMTrustBoundaryTests {
         config.maxMemberCount = 3  // includes the local member
         let transport = MockTransport(localAddress: "127.0.0.1:8000")
         let localID = MemberID(id: "node1", address: "127.0.0.1:8000")
-        let instance = SWIMInstance(localMember: Member(id: localID), config: config, transport: transport)
+        let instance = SWIMCluster(localMember: Member(id: localID), config: config, transport: transport)
         await instance.start()
 
         let errorTask = collectError(from: instance) { error in
@@ -178,7 +178,7 @@ struct SWIMTrustBoundaryTests {
         let transport = MockTransport(localAddress: "127.0.0.1:8000")
         let localID = MemberID(id: "node1", address: "127.0.0.1:8000")
         // Start at a modest local incarnation.
-        let instance = SWIMInstance(
+        let instance = SWIMCluster(
             localMember: Member(id: localID, incarnation: Incarnation(value: 3)),
             config: .development,
             transport: transport
@@ -210,7 +210,7 @@ struct SWIMTrustBoundaryTests {
         let transport = MockTransport(localAddress: "127.0.0.1:8000")
         let localID = MemberID(id: "node1", address: "127.0.0.1:8000")
         // Local incarnation is already high.
-        let instance = SWIMInstance(
+        let instance = SWIMCluster(
             localMember: Member(id: localID, incarnation: Incarnation(value: 100)),
             config: .development,
             transport: transport

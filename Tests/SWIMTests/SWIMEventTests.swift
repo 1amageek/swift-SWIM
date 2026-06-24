@@ -15,7 +15,7 @@ struct SWIMEventTests {
         let transport = MockTransport(localAddress: "127.0.0.1:8000")
         let localMember = Member(id: MemberID(id: "node1", address: "127.0.0.1:8000"))
 
-        let instance = SWIMInstance(
+        let instance = SWIMCluster(
             localMember: localMember,
             config: .development,
             transport: transport
@@ -58,7 +58,7 @@ struct SWIMEventTests {
         let transport = MockTransport(localAddress: "127.0.0.1:8000")
         let localMember = Member(id: MemberID(id: "node1", address: "127.0.0.1:8000"))
 
-        let instance = SWIMInstance(
+        let instance = SWIMCluster(
             localMember: localMember,
             config: .development,
             transport: transport
@@ -104,7 +104,7 @@ struct SWIMEventTests {
         let transport = MockTransport(localAddress: "127.0.0.1:8000")
         let localMember = Member(id: MemberID(id: "node1", address: "127.0.0.1:8000"))
 
-        let instance = SWIMInstance(
+        let instance = SWIMCluster(
             localMember: localMember,
             config: .development,
             transport: transport
@@ -157,7 +157,7 @@ struct SWIMEventTests {
         let transport = MockTransport(localAddress: "127.0.0.1:8000")
         let localMember = Member(id: MemberID(id: "node1", address: "127.0.0.1:8000"))
 
-        let instance = SWIMInstance(
+        let instance = SWIMCluster(
             localMember: localMember,
             config: .development,
             transport: transport
@@ -210,7 +210,7 @@ struct SWIMEventTests {
         let transport = MockTransport(localAddress: "127.0.0.1:8000")
         let localMember = Member(id: MemberID(id: "node1", address: "127.0.0.1:8000"))
 
-        let instance = SWIMInstance(
+        let instance = SWIMCluster(
             localMember: localMember,
             config: .development,
             transport: transport
@@ -262,7 +262,7 @@ struct SWIMEventTests {
         let localMemberID = MemberID(id: "node1", address: "127.0.0.1:8000")
         let localMember = Member(id: localMemberID, incarnation: Incarnation(value: 5))
 
-        let instance = SWIMInstance(
+        let instance = SWIMCluster(
             localMember: localMember,
             config: .development,
             transport: transport
@@ -308,7 +308,7 @@ struct SWIMEventTests {
         let transport = MockTransport(localAddress: "127.0.0.1:8000")
         let localMember = Member(id: MemberID(id: "node1", address: "127.0.0.1:8000"))
 
-        let instance = SWIMInstance(
+        let instance = SWIMCluster(
             localMember: localMember,
             config: .development,
             transport: transport

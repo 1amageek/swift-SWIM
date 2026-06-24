@@ -5,6 +5,7 @@
 import Foundation
 import Testing
 @testable import SWIM
+import SWIMWire
 
 @Suite("Benchmark Tests")
 struct BenchmarkTests {

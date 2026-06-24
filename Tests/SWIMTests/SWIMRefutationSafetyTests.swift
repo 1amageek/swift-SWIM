@@ -70,7 +70,7 @@ struct SWIMRefutationSafetyTests {
 
     /// Polls for `duration`, returning true if the member is ever observed dead.
     private func everBecomesDead(
-        _ instance: SWIMInstance,
+        _ instance: SWIMCluster,
         target: MemberID,
         within duration: Duration
     ) async throws -> Bool {
@@ -85,7 +85,7 @@ struct SWIMRefutationSafetyTests {
     }
 
     private func waitUntilSuspect(
-        _ instance: SWIMInstance,
+        _ instance: SWIMCluster,
         target: MemberID,
         timeout: Duration = .milliseconds(800)
     ) async throws -> Bool {
@@ -104,7 +104,7 @@ struct SWIMRefutationSafetyTests {
     func gossipedRecoveryCancelsKill() async throws {
         let transport = SilentTransport(localAddress: "127.0.0.1:8000")
         let localID = MemberID(id: "node1", address: "127.0.0.1:8000")
-        let instance = SWIMInstance(
+        let instance = SWIMCluster(
             localMember: Member(id: localID),
             config: refutationConfig(),
             transport: transport
@@ -158,7 +158,7 @@ struct SWIMRefutationSafetyTests {
         // about that peer).
         let transport = SilentTransport(localAddress: "127.0.0.1:8000")
         let localID = MemberID(id: "node1", address: "127.0.0.1:8000")
-        let instance = SWIMInstance(
+        let instance = SWIMCluster(
             localMember: Member(id: localID),
             config: refutationConfig(),
             transport: transport
@@ -207,7 +207,7 @@ struct SWIMRefutationSafetyTests {
         config.suspicionMultiplier = 3.0  // ~42ms window
         let transport = SilentTransport(localAddress: "127.0.0.1:8000")
         let localID = MemberID(id: "node1", address: "127.0.0.1:8000")
-        let instance = SWIMInstance(
+        let instance = SWIMCluster(
             localMember: Member(id: localID),
             config: config,
             transport: transport

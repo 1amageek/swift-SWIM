@@ -1,10 +1,11 @@
-/// SWIM Instance
+/// SWIM Cluster
 ///
-/// Main SWIM protocol instance that coordinates failure detection and gossip.
+/// Tier-1 orchestration actor that coordinates failure detection and gossip.
 
 import Foundation
+import SWIMWire
 
-/// Main SWIM protocol instance.
+/// The SWIM cluster orchestration actor.
 ///
 /// This actor coordinates all SWIM protocol activities:
 /// - Periodic failure detection probes
@@ -15,7 +16,7 @@ import Foundation
 /// ## Usage
 /// ```swift
 /// let transport = MyTransport()
-/// let swim = SWIMInstance(
+/// let swim = SWIMCluster(
 ///     localMember: Member(id: MemberID(id: "node1", address: "127.0.0.1:8000")),
 ///     config: .default,
 ///     transport: transport
@@ -28,7 +29,7 @@ import Foundation
 ///     // Handle membership events
 /// }
 /// ```
-public actor SWIMInstance {
+public actor SWIMCluster {
     // MARK: - Properties
 
     private let config: SWIMConfiguration

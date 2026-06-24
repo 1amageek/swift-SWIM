@@ -6,6 +6,7 @@
 import Foundation
 import Testing
 @testable import SWIM
+import SWIMWire
 
 @Suite("Message Buffer Safety Tests")
 struct MessageBufferSafetyTests {

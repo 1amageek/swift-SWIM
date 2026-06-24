@@ -28,12 +28,12 @@ struct SWIMMultiNodeTests {
         transport1.setLocalMemberID(member1.id)
         transport2.setLocalMemberID(member2.id)
 
-        let node1 = SWIMInstance(
+        let node1 = SWIMCluster(
             localMember: member1,
             config: .development,
             transport: transport1
         )
-        let node2 = SWIMInstance(
+        let node2 = SWIMCluster(
             localMember: member2,
             config: .development,
             transport: transport2
@@ -95,9 +95,9 @@ struct SWIMMultiNodeTests {
         transport2.setLocalMemberID(member2.id)
         transport3.setLocalMemberID(member3.id)
 
-        let node1 = SWIMInstance(localMember: member1, config: .development, transport: transport1)
-        let node2 = SWIMInstance(localMember: member2, config: .development, transport: transport2)
-        let node3 = SWIMInstance(localMember: member3, config: .development, transport: transport3)
+        let node1 = SWIMCluster(localMember: member1, config: .development, transport: transport1)
+        let node2 = SWIMCluster(localMember: member2, config: .development, transport: transport2)
+        let node3 = SWIMCluster(localMember: member3, config: .development, transport: transport3)
 
         // Start all nodes
         await node1.start()
@@ -170,9 +170,9 @@ struct SWIMMultiNodeTests {
         transport2.setLocalMemberID(member2.id)
         transport3.setLocalMemberID(member3.id)
 
-        let node1 = SWIMInstance(localMember: member1, config: .development, transport: transport1)
-        let node2 = SWIMInstance(localMember: member2, config: .development, transport: transport2)
-        let node3 = SWIMInstance(localMember: member3, config: .development, transport: transport3)
+        let node1 = SWIMCluster(localMember: member1, config: .development, transport: transport1)
+        let node2 = SWIMCluster(localMember: member2, config: .development, transport: transport2)
+        let node3 = SWIMCluster(localMember: member3, config: .development, transport: transport3)
 
         await node1.start()
         await node2.start()
@@ -224,7 +224,7 @@ struct SWIMMultiNodeTests {
         var config = SWIMConfiguration.development
         config.pingTimeout = .milliseconds(30)
 
-        let node3 = SWIMInstance(localMember: member3, config: config, transport: transport3)
+        let node3 = SWIMCluster(localMember: member3, config: config, transport: transport3)
         await node3.start()
 
         // Node1 sends ping-req to Node3, asking to probe Node2
@@ -268,7 +268,7 @@ struct SWIMMultiNodeTests {
         let transport = MockTransport(localAddress: "127.0.0.1:8000")
         let localMember = Member(id: MemberID(id: "node1", address: "127.0.0.1:8000"))
 
-        let instance = SWIMInstance(
+        let instance = SWIMCluster(
             localMember: localMember,
             config: .development,
             transport: transport
@@ -317,7 +317,7 @@ struct SWIMMultiNodeTests {
         let transport = MockTransport(localAddress: "127.0.0.1:8000")
         let localMember = Member(id: MemberID(id: "node1", address: "127.0.0.1:8000"))
 
-        let instance = SWIMInstance(
+        let instance = SWIMCluster(
             localMember: localMember,
             config: config,
             transport: transport

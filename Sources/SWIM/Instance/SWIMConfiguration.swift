@@ -1,8 +1,9 @@
 /// SWIM Configuration
 ///
-/// Configuration options for the SWIM protocol instance.
+/// Configuration options for the SWIM protocol cluster.
 
 import Foundation
+import SWIMWire
 
 /// Strategy for selecting probe targets.
 public enum ProbeSelectionStrategy: Sendable {

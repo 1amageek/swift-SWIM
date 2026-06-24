@@ -1,10 +1,10 @@
-/// SWIMInstance Tests
+/// SWIMCluster Tests
 
 import Foundation
 import Testing
 @testable import SWIM
 
-@Suite("SWIMInstance Tests")
+@Suite("SWIMCluster Tests")
 struct SWIMInstanceTests {
 
     private final class PingRequestFailingTransport: SWIMTransport, Sendable {
@@ -41,7 +41,7 @@ struct SWIMInstanceTests {
         let transport = MockTransport(localAddress: "127.0.0.1:8000")
         let localMember = Member(id: MemberID(id: "node1", address: "127.0.0.1:8000"))
 
-        let instance = SWIMInstance(
+        let instance = SWIMCluster(
             localMember: localMember,
             config: .default,
             transport: transport
@@ -56,7 +56,7 @@ struct SWIMInstanceTests {
         let transport = MockTransport(localAddress: "127.0.0.1:8000")
         let localMember = Member(id: MemberID(id: "node1", address: "127.0.0.1:8000"))
 
-        let instance = SWIMInstance(
+        let instance = SWIMCluster(
             localMember: localMember,
             config: .default,
             transport: transport
@@ -79,7 +79,7 @@ struct SWIMInstanceTests {
         let transport = MockTransport(localAddress: "127.0.0.1:8000")
         let localMember = Member(id: MemberID(id: "node1", address: "127.0.0.1:8000"))
 
-        let instance = SWIMInstance(
+        let instance = SWIMCluster(
             localMember: localMember,
             config: .default,
             transport: transport
@@ -108,7 +108,7 @@ struct SWIMInstanceTests {
         let transport = MockTransport(localAddress: "127.0.0.1:8000")
         let localMember = Member(id: MemberID(id: "node1", address: "127.0.0.1:8000"))
 
-        let instance = SWIMInstance(
+        let instance = SWIMCluster(
             localMember: localMember,
             config: .default,
             transport: transport
@@ -131,7 +131,7 @@ struct SWIMInstanceTests {
         let transport = MockTransport(localAddress: "127.0.0.1:8000")
         let localMember = Member(id: MemberID(id: "node1", address: "127.0.0.1:8000"))
 
-        let instance = SWIMInstance(
+        let instance = SWIMCluster(
             localMember: localMember,
             config: .default,
             transport: transport
@@ -147,7 +147,7 @@ struct SWIMInstanceTests {
         let transport = MockTransport(localAddress: "127.0.0.1:8000")
         let localMember = Member(id: MemberID(id: "node1", address: "127.0.0.1:8000"))
 
-        let instance = SWIMInstance(
+        let instance = SWIMCluster(
             localMember: localMember,
             config: .default,
             transport: transport
@@ -168,7 +168,7 @@ struct SWIMInstanceTests {
         let transport = PingRequestFailingTransport(localAddress: "127.0.0.1:8000")
         let localMember = Member(id: MemberID(id: "node1", address: "127.0.0.1:8000"))
 
-        let instance = SWIMInstance(
+        let instance = SWIMCluster(
             localMember: localMember,
             config: config,
             transport: transport

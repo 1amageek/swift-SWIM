@@ -2,6 +2,7 @@
 
 import Testing
 @testable import SWIM
+import SWIMWire
 
 @Suite("Disseminator Tests")
 struct DisseminatorTests {

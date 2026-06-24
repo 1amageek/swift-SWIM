@@ -1,6 +1,8 @@
 /// SWIM Events
 ///
-/// Events emitted by the SWIM instance for observers.
+/// Events emitted by the SWIM cluster for observers.
+
+import SWIMWire
 
 /// Events emitted by a SWIM instance.
 ///

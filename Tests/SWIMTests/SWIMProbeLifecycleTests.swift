@@ -77,7 +77,7 @@ struct SWIMProbeLifecycleTests {
             ackDelay: .milliseconds(5),   // well within the ping timeout
             ackEnabled: true
         )
-        let instance = SWIMInstance(localMember: Member(id: localID), config: config, transport: transport)
+        let instance = SWIMCluster(localMember: Member(id: localID), config: config, transport: transport)
         await instance.start()
 
         let peerID = MemberID(id: "node2", address: "127.0.0.1:8001")
@@ -114,7 +114,7 @@ struct SWIMProbeLifecycleTests {
             ackDelay: .milliseconds(20),
             ackEnabled: true
         )
-        let instance = SWIMInstance(localMember: Member(id: localID), config: config, transport: transport)
+        let instance = SWIMCluster(localMember: Member(id: localID), config: config, transport: transport)
         await instance.start()
 
         let peerID = MemberID(id: "node2", address: "127.0.0.1:8001")
@@ -154,7 +154,7 @@ struct SWIMProbeLifecycleTests {
             ackDelay: .milliseconds(0),
             ackEnabled: false  // never ack
         )
-        let instance = SWIMInstance(localMember: Member(id: localID), config: config, transport: transport)
+        let instance = SWIMCluster(localMember: Member(id: localID), config: config, transport: transport)
         await instance.start()
 
         let peerID = MemberID(id: "node2", address: "127.0.0.1:8001")
@@ -188,7 +188,7 @@ struct SWIMProbeLifecycleTests {
     func joinOnlySelfSeedsFails() async throws {
         let localID = MemberID(id: "node1", address: "127.0.0.1:8000")
         let transport = MockTransport(localAddress: "127.0.0.1:8000")
-        let instance = SWIMInstance(localMember: Member(id: localID), config: .development, transport: transport)
+        let instance = SWIMCluster(localMember: Member(id: localID), config: .development, transport: transport)
         await instance.start()
 
         await #expect(throws: SWIMError.self) {
@@ -208,7 +208,7 @@ struct SWIMProbeLifecycleTests {
         let transport = LoopbackTransport(localAddress: "127.0.0.1:8000")
         let localID = MemberID(id: "node1", address: "127.0.0.1:8000")
         transport.setLocalMemberID(localID)
-        let instance = SWIMInstance(localMember: Member(id: localID), config: .development, transport: transport)
+        let instance = SWIMCluster(localMember: Member(id: localID), config: .development, transport: transport)
         await instance.start()
 
         let unreachable = [

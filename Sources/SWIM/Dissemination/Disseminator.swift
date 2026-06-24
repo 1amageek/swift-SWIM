@@ -5,12 +5,13 @@
 /// ## Caller-locked adapter
 ///
 /// This is the host-side adapter over the Embedded-clean value-type
-/// `SWIMCore.DisseminationState`. It owns the `Synchronization.Mutex`; every
+/// `SWIMWire.DisseminationState`. It owns the `Synchronization.Mutex`; every
 /// public method delegates to the value type's `mutating` methods under the lock,
 /// so `Disseminator` keeps its existing `Sendable`, thread-safe behavior. The
 /// value type has no Mutex, no clock, and no Foundation.
 
 import Synchronization
+import SWIMWire
 
 /// Manages gossip dissemination.
 ///

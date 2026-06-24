@@ -6,7 +6,7 @@
 /// ## Caller-locked + clock-seam adapter
 ///
 /// This is the host-side adapter over the Embedded-clean value-type state machine
-/// `SWIMCore.MembershipState`. It owns the two things the core deliberately does
+/// `SWIMWire.MembershipState`. It owns the two things the core deliberately does
 /// NOT:
 ///
 /// 1. **Synchronization** — a `Synchronization.Mutex` wraps the value type; every
@@ -22,6 +22,7 @@
 /// implementation.
 
 import Synchronization
+import SWIMWire
 
 /// Thread-safe member list for SWIM protocol.
 ///

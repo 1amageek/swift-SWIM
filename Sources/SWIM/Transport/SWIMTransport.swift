@@ -4,6 +4,7 @@
 
 import Foundation
 import Synchronization
+import SWIMWire
 
 /// Transport protocol for SWIM messages.
 ///

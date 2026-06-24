@@ -17,7 +17,7 @@ struct SWIMSelfRefutationTests {
         let localMemberID = MemberID(id: "node1", address: "127.0.0.1:8000")
         let localMember = Member(id: localMemberID, incarnation: Incarnation(value: 5))
 
-        let instance = SWIMInstance(
+        let instance = SWIMCluster(
             localMember: localMember,
             config: .development,
             transport: transport
@@ -65,7 +65,7 @@ struct SWIMSelfRefutationTests {
         let localMemberID = MemberID(id: "node1", address: "127.0.0.1:8000")
         let localMember = Member(id: localMemberID, incarnation: Incarnation(value: 3))
 
-        let instance = SWIMInstance(
+        let instance = SWIMCluster(
             localMember: localMember,
             config: .development,
             transport: transport
@@ -113,7 +113,7 @@ struct SWIMSelfRefutationTests {
         let localMemberID = MemberID(id: "node1", address: "127.0.0.1:8000")
         let localMember = Member(id: localMemberID, incarnation: Incarnation(value: 1))
 
-        let instance = SWIMInstance(
+        let instance = SWIMCluster(
             localMember: localMember,
             config: .development,
             transport: transport
@@ -150,7 +150,7 @@ struct SWIMSelfRefutationTests {
         let localMemberID = MemberID(id: "node1", address: "127.0.0.1:8000")
         let localMember = Member(id: localMemberID, incarnation: Incarnation(value: 10))
 
-        let instance = SWIMInstance(
+        let instance = SWIMCluster(
             localMember: localMember,
             config: .development,
             transport: transport
@@ -194,7 +194,7 @@ struct SWIMSelfRefutationTests {
         let localMemberID = MemberID(id: "node1", address: "127.0.0.1:8000")
         let localMember = Member(id: localMemberID, incarnation: Incarnation(value: 5))
 
-        let instance = SWIMInstance(
+        let instance = SWIMCluster(
             localMember: localMember,
             config: .development,
             transport: transport
