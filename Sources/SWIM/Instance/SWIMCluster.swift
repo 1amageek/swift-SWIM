@@ -603,12 +603,34 @@ public actor SWIMCluster {
     }
 
     private func handlePing(sequenceNumber: UInt64, from sender: MemberID) async {
-        // Add sender to member list if new
+        // Admit the ping sender through the SAME trust boundary as gossip
+        // (`applyGossip`). The sender is an unauthenticated source — exactly the
+        // threat the member-table cap guards against — so it must respect
+        // `maxMemberCount` rather than taking the trusting `update` path, which
+        // bypasses the cap and would let a spoofed-source ping flood grow the
+        // table unbounded. A rejected admission is surfaced (never silently
+        // dropped) and does NOT prevent answering the ping below.
         let senderMember = Member(id: sender)
-        if let change = memberList.update(senderMember) {
-            if case .joined(let member) = change {
-                eventContinuation.yield(.memberJoined(member))
-            }
+        let change: MembershipChange?
+        do {
+            change = try memberList.applyGossip(
+                senderMember,
+                maxIncarnationDelta: config.maxIncarnationDelta,
+                maxMemberCount: config.maxMemberCount
+            )
+        } catch let rejection as MemberListRejection {
+            eventContinuation.yield(.error(.protocolError(
+                "Rejected ping sender: \(rejection)"
+            )))
+            change = nil
+        } catch {
+            eventContinuation.yield(.error(.protocolError(
+                "Rejected ping sender: \(error)"
+            )))
+            change = nil
+        }
+        if case .joined(let member)? = change {
+            eventContinuation.yield(.memberJoined(member))
         }
 
         // Send ack

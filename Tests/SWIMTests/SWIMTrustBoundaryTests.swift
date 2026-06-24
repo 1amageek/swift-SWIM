@@ -171,6 +171,43 @@ struct SWIMTrustBoundaryTests {
         #expect(await errorTask.value, "Overflow joins must be surfaced as rejections")
     }
 
+    @Test("Pinging beyond the member-table cap from spoofed sources is rejected by the instance", .timeLimit(.minutes(1)))
+    func memberTableCapHoldsViaPingPath() async throws {
+        var config = SWIMConfiguration.development
+        config.maxMemberCount = 3  // includes the local member
+        // Disable the protocol loop's own probing so this test isolates the
+        // ping-sender admission path.
+        config.protocolPeriod = .seconds(3600)
+        let transport = MockTransport(localAddress: "127.0.0.1:8000")
+        let localID = MemberID(id: "node1", address: "127.0.0.1:8000")
+        let instance = SWIMCluster(localMember: Member(id: localID), config: config, transport: transport)
+        await instance.start()
+
+        let errorTask = collectError(from: instance) { error in
+            if case .protocolError(let msg) = error { return msg.contains("Rejected ping sender") }
+            return false
+        }
+
+        // Flood the instance with pings from many distinct (spoofed) source
+        // addresses, far exceeding the cap. Each carries an empty gossip payload,
+        // so the only admission path exercised is the ping-sender admission in
+        // handlePing.
+        for i in 0..<50 {
+            let spoofed = MemberID(id: "spoof\(i)", address: "127.0.0.1:9\(String(format: "%03d", i))")
+            transport.receive(.ping(sequenceNumber: UInt64(i), payload: .empty), from: spoofed)
+        }
+        try await Task.sleep(for: .milliseconds(120))
+
+        // The cap must hold via the ping path, mirroring the gossip-path cap test:
+        // the member table must not grow past maxMemberCount regardless of how
+        // many spoofed senders ping us.
+        let count = await instance.members.count
+        #expect(count <= 3, "Member table must not grow past the configured cap via the ping path (was \(count))")
+
+        try await instance.shutdown()
+        #expect(await errorTask.value, "Overflow ping-sender admissions must be surfaced as rejections")
+    }
+
     // MARK: - Self-refutation against forged max incarnation (finding #3)
 
     @Test("Self-refutation against a forged max incarnation produces a strictly greater local incarnation", .timeLimit(.minutes(1)))
