@@ -4,8 +4,18 @@ A pure Swift implementation of the SWIM (Scalable Weakly-consistent Infection-st
 
 ## Overview
 
-This library provides:
-- Failure detection using ping/ping-req/ack protocol
+This package ships three products following the Embedded-first 3-tier API design:
+
+- **`SWIM`** (Tier-1 facade) — the orchestration actor `SWIMCluster`, the caller-locked
+  state-machine holders, the transport protocol, and the Foundation bridges.
+- **`SWIMWire`** (Tier-3 codec core) — the Embedded-clean gossip codec plus the
+  caller-locked value-type membership state machine. A SEPARATE import: `import SWIM`
+  re-exports only the value/identity types (Member/MemberID/MemberStatus/Incarnation,
+  ...) via symbol-level `@_exported import`; it does NOT pull in the codec.
+- **`SWIMTransportUDP`** (UDP transport) — `SWIMUDPTransport`, built on swift-nio-udp.
+
+This module (`SWIM`, the Tier-1 facade) provides:
+- Failure detection using ping/ping-req/ack protocol (`SWIMCluster`)
 - Gossip-based membership dissemination
 - Incarnation-based consistency mechanism
 - Injectable transport protocol for networking
@@ -13,51 +23,83 @@ This library provides:
 ## Module Structure
 
 ```
-Sources/SWIM/
-├── CONTEXT.md              # This file
-├── SWIM.swift              # Module documentation and re-exports
+Sources/SWIM/                     # Tier-1 facade (orchestration + state holders + bridges)
+├── CONTEXT.md                    # This file
+├── SWIM.swift                    # Module documentation + curated re-exports
+├── MemberID+Data.swift           # Foundation Data bridge for MemberID
+├── SWIMMessageCodec+Data.swift   # Foundation Data bridge for the codec
 │
 ├── Core/
-│   ├── Member.swift        # MemberID, Member, MembershipChange
-│   ├── MemberStatus.swift  # Alive/Suspect/Dead status
-│   ├── Incarnation.swift   # Incarnation number
-│   └── MemberList.swift    # Thread-safe member list
-│
-├── Messages/
-│   ├── Message.swift       # SWIMMessage enum
-│   ├── Payload.swift       # GossipPayload, MembershipUpdate
-│   └── MessageCodec.swift  # Binary encoding/decoding
+│   └── MemberList.swift          # Mutex+ContinuousClock holder around MembershipState
 │
 ├── Detection/
-│   ├── ProbeTarget.swift       # ProbeResult, PendingProbe
-│   └── SuspicionTimer.swift    # Suspicion timeout management
+│   └── SuspicionTimer.swift      # Suspicion timeout management (actor)
 │
 ├── Dissemination/
-│   ├── Disseminator.swift      # Gossip dissemination
-│   └── BroadcastQueue.swift    # Priority queue for updates
+│   └── Disseminator.swift        # Mutex holder around DisseminationState
 │
 ├── Instance/
-│   ├── SWIMInstance.swift      # Main SWIM instance (actor)
-│   ├── SWIMConfiguration.swift # Configuration options
-│   └── SWIMEvent.swift         # Events for observers
+│   ├── SWIMCluster.swift         # Main orchestration actor
+│   ├── SWIMConfiguration.swift   # Configuration options
+│   └── SWIMEvent.swift           # Events for observers (and SWIMError)
+│
+├── Security/
+│   └── SWIMMessageAuthenticator.swift # Optional message-authentication hook
 │
 └── Transport/
-    └── SWIMTransport.swift     # Transport protocol + mock implementations
+    └── SWIMTransport.swift        # Transport protocol + Mock/Loopback test transports
+
+Sources/SWIMWire/                 # Tier-3 codec core (Embedded-clean: no Foundation/any)
+├── SWIMWire.swift                # Module documentation
+├── Member.swift                  # MemberID, Member, MembershipChange
+├── MemberStatus.swift            # Alive/Suspect/Dead status
+├── Incarnation.swift             # Incarnation number (saturating)
+├── MembershipState.swift         # Caller-locked value-type state machine
+├── MemberListError.swift         # Trust-boundary rejections (MemberListRejection)
+├── Message.swift                 # SWIMMessage enum
+├── Payload.swift                 # GossipPayload, MembershipUpdate
+├── MessageCodec.swift            # Binary encoding/decoding (typed throws)
+├── MessageBuffer.swift           # Zero-copy WriteBuffer / ReadBuffer
+├── DisseminationState.swift      # Value-type dissemination bookkeeping
+├── BroadcastQueue.swift          # Priority queue for updates
+├── ProbeTarget.swift             # ProbeResult
+├── MemberID+Bytes.swift          # [UInt8] codec helpers for MemberID
+└── UTF8Validation.swift          # Strict UTF-8 decode
+
+Sources/SWIMTransportUDP/         # UDP transport (swift-nio-udp)
+└── SWIMTransportUDP.swift        # SWIMUDPTransport
 ```
 
 ## Key Types
+
+### Tier-3 codec core (`import SWIMWire`)
 
 | Type | Description |
 |------|-------------|
 | `MemberID` | Unique identifier for a member (id + address) |
 | `Member` | A member with status and incarnation |
 | `MemberStatus` | Alive, Suspect, or Dead |
-| `Incarnation` | Version number for consistency |
-| `MemberList` | Thread-safe collection of members |
+| `Incarnation` | Saturating version number for consistency |
+| `MembershipState` | Caller-locked value-type membership state machine (member table, incarnation/precedence, refutation safety, suspicion->dead, table cap, gossip trust boundary, deterministic probe enumeration) |
+| `MemberListRejection` | Typed reasons a gossiped update is rejected |
 | `SWIMMessage` | Protocol messages (Ping, PingReq, Ack, Nack) |
 | `GossipPayload` | Membership updates piggybacked on messages |
-| `SWIMInstance` | Main protocol instance (actor) |
+| `SWIMMessageCodec` | Binary encode/decode (typed `SWIMCodecError`) |
+| `DisseminationState` / `BroadcastQueue` | Value-type dissemination bookkeeping |
+| `ProbeResult` | Outcome of a probe |
+
+### Tier-1 facade (`import SWIM`)
+
+| Type | Description |
+|------|-------------|
+| `SWIMCluster` | Main orchestration actor |
 | `SWIMTransport` | Protocol for network transport |
+| `MemberList` | `Mutex<MembershipState>` + `ContinuousClock` holder (host-only) |
+| `Disseminator` | `Mutex<DisseminationState>` holder (host-only) |
+| `SuspicionTimer` | Suspicion timeout management (actor) |
+| `SWIMConfiguration` | Protocol parameters and trust bounds |
+| `SWIMEvent` / `SWIMError` | Membership events / facade errors |
+| `SWIMMessageAuthenticator` | Optional message-authentication hook |
 
 ## Protocol Flow
 
@@ -106,9 +148,9 @@ import SWIM
 // Create transport
 let transport = MyTransport(localAddress: "192.168.1.1:8000")
 
-// Create SWIM instance
+// Create the SWIM cluster
 let localMember = Member(id: MemberID(id: "node1", address: "192.168.1.1:8000"))
-let swim = SWIMInstance(
+let swim = SWIMCluster(
     localMember: localMember,
     config: .default,
     transport: transport
@@ -139,10 +181,11 @@ for await event in swim.events {
 
 | Component | Model | Reason |
 |-----------|-------|--------|
-| `SWIMInstance` | `actor` | User-facing API, async operations |
-| `MemberList` | `Mutex<T>` | High-frequency internal access |
-| `Disseminator` | `Mutex<T>` | High-frequency internal access |
+| `SWIMCluster` | `actor` | User-facing API, async operations |
+| `MemberList` | `Mutex<MembershipState>` | High-frequency internal access |
+| `Disseminator` | `Mutex<DisseminationState>` | High-frequency internal access |
 | `SuspicionTimer` | `actor` | Manages async timers |
+| `MembershipState` | value type (caller-locked) | Embedded-clean: no Mutex/clock/RNG; the caller drives it under a lock and injects `nowMillis` |
 
 ## Wire Format
 

@@ -1,10 +1,28 @@
 # swift-SWIM Production Design
 
+> **HISTORICAL PLANNING DOCUMENT.** This was the original "to build" roadmap and
+> does NOT describe the package as it stands today. For current reality see
+> [`README.md`](README.md) and [`Sources/SWIM/CONTEXT.md`](Sources/SWIM/CONTEXT.md).
+>
+> Notable ways this document is now out of date:
+> - The orchestration actor is **`SWIMCluster`**, not `SWIMInstance`.
+> - UDP transport (`SWIMUDPTransport` in the `SWIMTransportUDP` target) **is
+>   already built — on swift-nio-udp, NOT Apple's Network framework**. The
+>   `UDPSocket` / `UDPTransport` / `NWConnection` / `NWEndpoint` designs sketched
+>   in Phase 1 below were not adopted.
+> - The package has **three** products (`SWIM`, `SWIMWire`, `SWIMTransportUDP`),
+>   not the two shown in the Package.swift sketch at the end. The Embedded-clean
+>   codec + value-type `MembershipState` live in the `SWIMWire` target.
+> - Phases 2–4 (reliability/retry, metrics/health, discovery integration) describe
+>   types that **do not exist** in the codebase. Treat them as aspirational, not
+>   implemented.
+
 ## Overview
 
-Production-ready implementation of swift-SWIM with real UDP transport, enhanced reliability, and observability features.
+Original goal: take the core protocol to production with real UDP transport,
+enhanced reliability, and observability features.
 
-## Current State
+## Current State (as planned at the time of writing — now superseded)
 
 ```
 swift-SWIM/
@@ -16,30 +34,44 @@ swift-SWIM/
 └── Transport/      # SWIMTransport (protocol), MockTransport, LoopbackTransport
 ```
 
+> Superseded: the codec and value types were since extracted into a separate
+> Embedded-clean `SWIMWire` target, and `Instance/SWIMInstance.swift` became
+> `Instance/SWIMCluster.swift`. See `Sources/SWIM/CONTEXT.md` for the real tree.
+
 **Status**: Core protocol logic complete, tested, optimized (zero-copy parsing)
 
 ## Production Requirements
 
-### 1. Real Network Transport (P0)
+### 1. Real Network Transport (P0) — LANDED (differently)
 
-UDP transport using Apple's Network framework.
+UDP transport. **Built as `SWIMUDPTransport` on swift-nio-udp**, NOT on Apple's
+Network framework as originally proposed below.
 
-### 2. Enhanced Reliability (P1)
+### 2. Enhanced Reliability (P1) — NOT IMPLEMENTED
 
 - Connection state management
 - Retry logic with backoff
 - Graceful degradation
 
-### 3. Discovery Integration (P2)
+### 3. Discovery Integration (P2) — NOT IMPLEMENTED
 
 - Integration with mDNS for local network discovery
 - Seed node configuration
 
-### 4. Observability (P1)
+### 4. Observability (P1) — NOT IMPLEMENTED
 
 - Metrics collection
 - Structured logging
 - Health checks
+
+---
+
+> **Everything below this line is the original aspirational plan.** It is retained
+> for historical context only. The `UDPSocket` / `UDPTransport` / `Network`
+> framework designs, the `SWIMInstance` references, the metrics / health / retry /
+> discovery APIs, and the 2-product `Package.swift` were NOT adopted as written.
+> The shipped UDP transport is `SWIMUDPTransport` (swift-nio-udp); the shipped
+> orchestrator is `SWIMCluster`; the shipped package has three products.
 
 ---
 
