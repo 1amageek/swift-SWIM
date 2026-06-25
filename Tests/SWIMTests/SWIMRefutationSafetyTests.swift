@@ -69,8 +69,8 @@ struct SWIMRefutationSafetyTests {
     }
 
     /// Polls for `duration`, returning true if the member is ever observed dead.
-    private func everBecomesDead(
-        _ instance: SWIMCluster,
+    private func everBecomesDead<Transport: SWIMTransport, Clock: SWIMClock>(
+        _ instance: SWIMCluster<Transport, Clock>,
         target: MemberID,
         within duration: Duration
     ) async throws -> Bool {
@@ -84,8 +84,8 @@ struct SWIMRefutationSafetyTests {
         return false
     }
 
-    private func waitUntilSuspect(
-        _ instance: SWIMCluster,
+    private func waitUntilSuspect<Transport: SWIMTransport, Clock: SWIMClock>(
+        _ instance: SWIMCluster<Transport, Clock>,
         target: MemberID,
         timeout: Duration = .milliseconds(800)
     ) async throws -> Bool {

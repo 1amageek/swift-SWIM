@@ -15,10 +15,13 @@ import SWIMWire
 ///
 /// When a member becomes suspect, a timer is started. If the member
 /// doesn't prove itself alive before the timer expires, it's marked dead.
-public actor SuspicionTimer {
-    /// The monotonic clock + sleep seam used to schedule expirations
-    /// (`any SWIMClock`).
-    private let clock: any SWIMClock
+///
+/// Generic over the injected ``SWIMClock`` so the type is Embedded-clean: an
+/// `any SWIMClock` existential is rejected under Embedded Swift, whereas a
+/// concrete `Clock` type parameter monomorphizes cleanly.
+public actor SuspicionTimer<Clock: SWIMClock> {
+    /// The monotonic clock + sleep seam used to schedule expirations.
+    private let clock: Clock
 
     /// An active suspicion: the timer task plus the incarnation captured when
     /// suspicion started. The captured incarnation is used by the kill path to
@@ -31,22 +34,11 @@ public actor SuspicionTimer {
 
     private var suspicions: [MemberID: Suspicion]
 
-    #if !hasFeature(Embedded)
-    /// Creates a new suspicion timer backed by the host system clock.
-    ///
-    /// HOST-ONLY default: ``SystemSWIMClock`` does not exist under Embedded, so an
-    /// Embedded caller must use ``init(clock:)`` and inject its own clock.
-    public init() {
-        self.suspicions = [:]
-        self.clock = SystemSWIMClock()
-    }
-    #endif
-
     /// Creates a new suspicion timer driven by the given clock seam.
     ///
     /// - Parameter clock: The monotonic clock + sleep seam used to schedule
     ///   suspicion expirations.
-    public init(clock: any SWIMClock) {
+    public init(clock: Clock) {
         self.suspicions = [:]
         self.clock = clock
     }
@@ -126,3 +118,15 @@ public actor SuspicionTimer {
         suspicions.count
     }
 }
+
+#if !hasFeature(Embedded)
+extension SuspicionTimer where Clock == SystemSWIMClock {
+    /// Creates a new suspicion timer backed by the host system clock.
+    ///
+    /// HOST-ONLY default: ``SystemSWIMClock`` does not exist under Embedded, so an
+    /// Embedded caller must use ``init(clock:)`` and inject its own clock.
+    public init() {
+        self.init(clock: SystemSWIMClock())
+    }
+}
+#endif

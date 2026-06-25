@@ -31,10 +31,14 @@ import SWIMWire
 /// - Adding/updating/removing members
 /// - Random member selection for probing
 /// - Status-based queries
-public final class MemberList: Sendable {
-    /// The monotonic clock seam (`any SWIMClock`). `nowMillis()` is measured
-    /// relative to the epoch captured at init.
-    private let clock: any SWIMClock
+///
+/// Generic over the injected ``SWIMClock`` so the type is Embedded-clean: an
+/// `any SWIMClock` existential is rejected under Embedded Swift, whereas a
+/// concrete `Clock` type parameter monomorphizes cleanly.
+public final class MemberList<Clock: SWIMClock>: Sendable {
+    /// The monotonic clock seam. `nowMillis()` is measured relative to the epoch
+    /// captured at init.
+    private let clock: Clock
 
     private let state: FacadeLock<MembershipState>
 
@@ -58,27 +62,15 @@ public final class MemberList: Sendable {
         return secondsMillis &+ attoMillis
     }
 
-    #if !hasFeature(Embedded)
-    /// Creates an empty member list backed by the host system clock.
-    public convenience init() {
-        self.init(clock: SystemSWIMClock())
-    }
-
-    /// Creates a member list with initial members backed by the host system clock.
-    public convenience init(members: [Member]) {
-        self.init(members: members, clock: SystemSWIMClock())
-    }
-    #endif
-
     /// Creates an empty member list driven by the given clock seam.
-    public init(clock: any SWIMClock) {
+    public init(clock: Clock) {
         self.clock = clock
         self.epochNanos = clock.monotonicNanos()
         self.state = FacadeLock(MembershipState())
     }
 
     /// Creates a member list with initial members driven by the given clock seam.
-    public init(members: [Member], clock: any SWIMClock) {
+    public init(members: [Member], clock: Clock) {
         self.clock = clock
         self.epochNanos = clock.monotonicNanos()
         self.state = FacadeLock(MembershipState(members: members))
@@ -250,6 +242,25 @@ public final class MemberList: Sendable {
         }
     }
 }
+
+#if !hasFeature(Embedded)
+extension MemberList where Clock == SystemSWIMClock {
+    /// Creates an empty member list backed by the host system clock.
+    ///
+    /// HOST-ONLY: ``SystemSWIMClock`` does not exist under Embedded; an Embedded
+    /// caller must use ``init(clock:)`` and inject its own clock.
+    public convenience init() {
+        self.init(clock: SystemSWIMClock())
+    }
+
+    /// Creates a member list with initial members backed by the host system clock.
+    ///
+    /// HOST-ONLY: see ``init()``.
+    public convenience init(members: [Member]) {
+        self.init(members: members, clock: SystemSWIMClock())
+    }
+}
+#endif
 
 extension MemberList: CustomStringConvertible {
     public var description: String {

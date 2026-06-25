@@ -29,19 +29,25 @@ import SWIMWire
 ///     // Handle membership events
 /// }
 /// ```
-public actor SWIMCluster {
+///
+/// Generic over the injected ``SWIMTransport`` and ``SWIMClock`` so the actor is
+/// Embedded-clean: `any SWIMTransport` / `any SWIMClock` existentials are rejected
+/// under Embedded Swift, whereas concrete `Transport` / `Clock` type parameters
+/// monomorphize cleanly. On host, ``SystemSWIMClock`` is the conventional `Clock`;
+/// callers select it via ``init(localMember:config:transport:)``.
+public actor SWIMCluster<Transport: SWIMTransport, Clock: SWIMClock> {
     // MARK: - Properties
 
     private let config: SWIMConfiguration
-    private let memberList: MemberList
+    private let memberList: MemberList<Clock>
     private let disseminator: Disseminator
-    private let suspicionTimer: SuspicionTimer
-    /// Transport for sending/receiving messages (`any SWIMTransport`).
-    private let transport: any SWIMTransport
+    private let suspicionTimer: SuspicionTimer<Clock>
+    /// Transport for sending/receiving messages.
+    private let transport: Transport
     /// The monotonic clock + sleep seam that drives the protocol period, ping
-    /// timeout, and suspicion timeout (`any SWIMClock`) — instead of
-    /// `Task.sleep(for:)` + `ContinuousClock`, both unavailable under Embedded.
-    private let clock: any SWIMClock
+    /// timeout, and suspicion timeout — instead of `Task.sleep(for:)` +
+    /// `ContinuousClock`, both unavailable under Embedded.
+    private let clock: Clock
 
     private var localMember: Member
     private var protocolTask: Task<Void, Never>?
@@ -97,31 +103,6 @@ public actor SWIMCluster {
 
     // MARK: - Initialization
 
-    #if !hasFeature(Embedded)
-    /// Creates a new SWIM instance backed by the host system clock.
-    ///
-    /// HOST-ONLY: ``SystemSWIMClock`` does not exist under Embedded; an Embedded
-    /// caller must use ``init(localMember:config:transport:clock:)`` and inject
-    /// its own clock.
-    ///
-    /// - Parameters:
-    ///   - localMember: The local member (this node)
-    ///   - config: SWIM configuration
-    ///   - transport: Transport for sending/receiving messages
-    public init(
-        localMember: Member,
-        config: SWIMConfiguration = .default,
-        transport: any SWIMTransport
-    ) {
-        self.init(
-            localMember: localMember,
-            config: config,
-            transport: transport,
-            clock: SystemSWIMClock()
-        )
-    }
-    #endif
-
     /// Creates a new SWIM instance driven by the given clock seam.
     ///
     /// - Parameters:
@@ -132,8 +113,8 @@ public actor SWIMCluster {
     public init(
         localMember: Member,
         config: SWIMConfiguration = .default,
-        transport: any SWIMTransport,
-        clock: any SWIMClock
+        transport: Transport,
+        clock: Clock
     ) {
         self.localMember = localMember
         self.config = config
@@ -960,3 +941,30 @@ public actor SWIMCluster {
         memberList.update(localMember)
     }
 }
+
+#if !hasFeature(Embedded)
+extension SWIMCluster where Clock == SystemSWIMClock {
+    /// Creates a new SWIM instance backed by the host system clock.
+    ///
+    /// HOST-ONLY: ``SystemSWIMClock`` does not exist under Embedded; an Embedded
+    /// caller must use ``init(localMember:config:transport:clock:)`` and inject
+    /// its own clock.
+    ///
+    /// - Parameters:
+    ///   - localMember: The local member (this node)
+    ///   - config: SWIM configuration
+    ///   - transport: Transport for sending/receiving messages
+    public init(
+        localMember: Member,
+        config: SWIMConfiguration = .default,
+        transport: Transport
+    ) {
+        self.init(
+            localMember: localMember,
+            config: config,
+            transport: transport,
+            clock: SystemSWIMClock()
+        )
+    }
+}
+#endif

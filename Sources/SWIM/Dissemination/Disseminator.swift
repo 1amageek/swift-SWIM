@@ -93,9 +93,9 @@ public final class Disseminator: Sendable {
     ///   - memberList: The member list to update
     /// - Returns: List of membership changes that occurred
     @discardableResult
-    public func processPayload(
+    public func processPayload<Clock: SWIMClock>(
         _ payload: GossipPayload,
-        memberList: MemberList
+        memberList: MemberList<Clock>
     ) -> [MembershipChange] {
         var changes: [MembershipChange] = []
 

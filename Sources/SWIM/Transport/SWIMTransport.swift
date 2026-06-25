@@ -33,14 +33,14 @@ import SWIMWire
 ///     }
 /// }
 /// ```
-#if hasFeature(Embedded)
-/// The typed error a ``SWIMTransport`` reports from ``SWIMTransport/send(_:to:)``
-/// under Embedded Swift, where untyped `throws` (which erases to `any Error`) is
-/// rejected.
+/// The typed error a ``SWIMTransport`` reports from ``SWIMTransport/send(_:to:)``.
 ///
-/// HOST builds keep `send`'s untyped `throws` so existing conformers (e.g.
-/// swift-libp2p's `SWIMTransportAdapter`, which propagates NIO/codec errors) stay
-/// source-compatible.
+/// Available in both host and Embedded builds so a conformer can adopt the typed
+/// `throws(SWIMTransportError)` signature uniformly. Under Embedded this is the
+/// REQUIRED signature (untyped `throws`, which erases to `any Error`, is rejected);
+/// on host the protocol requirement stays untyped `throws` so a conformer may
+/// still surface any backend error, but a conformer may also narrow to this typed
+/// error (a typed throw is a valid refinement of an untyped `throws` requirement).
 public enum SWIMTransportError: Error, Sendable {
     /// The transport could not deliver the message; `reason` describes why.
     case sendFailed(reason: String)
@@ -54,7 +54,6 @@ extension SWIMTransportError: CustomStringConvertible {
         }
     }
 }
-#endif
 
 public protocol SWIMTransport: Sendable {
     /// Sends a message to a member.

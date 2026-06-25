@@ -19,8 +19,8 @@ struct SWIMTrustBoundaryTests {
         func verify(message: SWIMMessage) -> Bool { accept }
     }
 
-    private func collectError(
-        from instance: SWIMCluster,
+    private func collectError<Transport: SWIMTransport, Clock: SWIMClock>(
+        from instance: SWIMCluster<Transport, Clock>,
         matching predicate: @escaping @Sendable (SWIMError) -> Bool
     ) -> Task<Bool, Never> {
         Task {
