@@ -1,49 +1,42 @@
 # swift-SWIM
 
-A pure Swift implementation of the SWIM protocol (Scalable Weakly-consistent Infection-style Process Group Membership).
+A pure Swift implementation of the SWIM protocol (Scalable Weakly-consistent
+Infection-style Process Group Membership) — membership management and failure
+detection for large-scale distributed systems. Embedded-first: the gossip codec and
+the value-type membership state machine are Foundation-free, and the byte currency
+is `[UInt8]`.
 
-## Overview
+> **Release status.** The released `1.2.0` ships the prior API. The Embedded-first
+> API documented here lives on the unreleased `embedded` branch (M8 pending) and is
+> not tagged — pin to the branch to use it.
 
-SWIM is a protocol for membership management and failure detection in large-scale distributed systems.
+## Features
 
-### Features
-
-- **Failure Detection**: Efficient node failure detection via ping/ping-req/ack protocol
-- **Gossip Dissemination**: Infection-style gossip for membership update propagation
-- **Consistency Guarantees**: Incarnation numbers for state consistency management
-- **High Performance**: Zero-copy parsing, @inlinable optimizations
-- **Pure Swift**: No external dependencies, Swift 6.2+ compatible
+- **Failure detection** — efficient node-failure detection via the ping / ping-req / ack protocol.
+- **Gossip dissemination** — infection-style gossip for membership-update propagation.
+- **Consistency** — incarnation numbers (saturating) for state-precedence management.
+- **Hardened trust boundary** — refutation safety, `maxIncarnationDelta` / `maxMemberCount`
+  sanity bounds, and an optional message authenticator; rejections are typed, never silent.
+- **Embedded-first** — the `SWIMWire` codec + value-type `MembershipState` have no
+  Foundation / `any`; typed throws; zero-copy parsing.
 
 ## Requirements
 
 - Swift 6.2+
 - macOS 15+, iOS 18+, tvOS 18+, watchOS 11+, visionOS 2+
 
-## Products
-
-This package ships three products following the Embedded-first 3-tier API design:
-
-| Product | Tier | Import | Use it for |
-|---------|------|--------|-----------|
-| `SWIM` | Tier-1 facade | `import SWIM` | Run a cluster: `SWIMCluster`, `SWIMTransport`, events, config. |
-| `SWIMWire` | Tier-3 codec | `import SWIMWire` | The Embedded-clean gossip codec + value-type `MembershipState`. Not pulled in by `import SWIM`. |
-| `SWIMTransportUDP` | UDP transport | `import SWIMTransportUDP` | `SWIMUDPTransport`, a ready-made transport built on swift-nio-udp. |
-
 ## Installation
 
-### Swift Package Manager
+Add swift-SWIM to your `Package.swift`. While the Embedded API is on the unreleased
+`embedded` branch, depend on the branch:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/1amageek/swift-SWIM.git", from: "1.2.0")
+    .package(url: "https://github.com/1amageek/swift-SWIM.git", branch: "embedded")
 ]
 ```
 
-> **Note:** The `SWIMCluster` / `SWIMWire` / `SWIMUDPTransport` API documented here
-> lives on the unreleased `embedded` branch. The released `1.2.0` ships the prior
-> API (`SWIMInstance`, a 2-product package). Until the embedded API is tagged,
-> depend on the branch:
-> `.package(url: "https://github.com/1amageek/swift-SWIM.git", branch: "embedded")`.
+Then add the product(s) you need to your target dependencies:
 
 ```swift
 .target(
@@ -57,7 +50,7 @@ dependencies: [
 ```swift
 import SWIM
 
-// 1. Create a transport (implement SWIMTransport protocol)
+// 1. Create a transport (implement SWIMTransport, or use SWIMUDPTransport)
 let transport = MyUDPTransport(localAddress: "192.168.1.1:8000")
 
 // 2. Create the SWIM cluster
@@ -75,78 +68,61 @@ try await swim.join(seeds: [seedMemberID])
 // 4. Monitor membership changes
 for await event in swim.events {
     switch event {
-    case .memberJoined(let member):
-        print("Joined: \(member)")
-    case .memberSuspected(let member):
-        print("Suspected: \(member)")
-    case .memberFailed(let member):
-        print("Failed: \(member)")
-    case .memberRecovered(let member):
-        print("Recovered: \(member)")
-    case .memberLeft(let id):
-        print("Left: \(id)")
-    default:
-        break
+    case .memberJoined(let member):    print("Joined: \(member)")
+    case .memberSuspected(let member): print("Suspected: \(member)")
+    case .memberFailed(let member):    print("Failed: \(member)")
+    case .memberRecovered(let member): print("Recovered: \(member)")
+    case .memberLeft(let id):          print("Left: \(id)")
+    default:                           break
     }
 }
 ```
 
+## Products
+
+This package ships three products following the Embedded-first 3-tier API design.
+
+| Product | Tier | Import | Use it for |
+|---------|------|--------|-----------|
+| `SWIM` | Tier-1 facade | `import SWIM` | Run a cluster: `SWIMCluster`, `SWIMTransport`, events, config. |
+| `SWIMWire` | Tier-3 codec | `import SWIMWire` | The Embedded-clean gossip codec + value-type `MembershipState`. Not pulled in by `import SWIM`. |
+| `SWIMTransportUDP` | UDP transport | `import SWIMTransportUDP` | `SWIMUDPTransport`, a ready-made transport built on swift-nio-udp. |
+
 ## Architecture
 
+Three layers. The Tier-1 `SWIM` facade owns synchronization, the clock, and
+randomness; the Tier-3 `SWIMWire` codec + value-type `MembershipState` own no host
+coupling and so compile under Embedded Swift.
+
 ```
-Sources/SWIM/                  # Tier-1 facade (orchestration + state holders + bridges)
-├── SWIM.swift                 # Module documentation + curated re-exports
-├── MemberID+Data.swift        # Foundation Data bridge for MemberID
-├── SWIMMessageCodec+Data.swift # Foundation Data bridge for the codec
-│
-├── Core/
-│   └── MemberList.swift       # Mutex<MembershipState> + ContinuousClock holder
-│
-├── Detection/
-│   └── SuspicionTimer.swift   # Suspicion timeouts (actor)
-│
-├── Dissemination/
-│   └── Disseminator.swift     # Mutex<DisseminationState> holder
-│
-├── Instance/
-│   ├── SWIMCluster.swift      # SWIM orchestration actor
-│   ├── SWIMConfiguration.swift # Configuration
-│   └── SWIMEvent.swift        # Events (and SWIMError)
-│
-├── Security/
-│   └── SWIMMessageAuthenticator.swift # Optional message-authentication hook
-│
-└── Transport/
-    └── SWIMTransport.swift    # Protocol + Mock/Loopback test transports
-
-Sources/SWIMWire/             # Tier-3 codec core (Embedded-clean: no Foundation/any)
-├── SWIMWire.swift            # Module documentation
-├── Member.swift              # MemberID, Member, MembershipChange
-├── MemberStatus.swift        # Alive/Suspect/Dead
-├── Incarnation.swift         # Incarnation numbers (saturating)
-├── MembershipState.swift     # Caller-locked value-type state machine
-├── MemberListError.swift     # Trust-boundary rejections (MemberListRejection)
-├── Message.swift             # SWIMMessage (Ping/PingReq/Ack/Nack)
-├── Payload.swift             # GossipPayload, MembershipUpdate
-├── MessageCodec.swift        # Binary encode/decode (typed throws)
-├── MessageBuffer.swift       # Zero-copy WriteBuffer / ReadBuffer
-├── DisseminationState.swift  # Value-type dissemination bookkeeping
-├── BroadcastQueue.swift      # Priority queue
-├── ProbeTarget.swift         # ProbeResult
-├── MemberID+Bytes.swift      # [UInt8] codec helpers
-└── UTF8Validation.swift      # Strict UTF-8 decode
-
-Sources/SWIMTransportUDP/     # UDP transport (swift-nio-udp)
-└── SWIMTransportUDP.swift    # SWIMUDPTransport
+┌─────────────────────────────────────────────────────────────┐
+│  Tier-1 facade  (import SWIM)                                │
+│  SWIMCluster (actor) — ping / ping-req / ack orchestration  │
+│  MemberList (Mutex<MembershipState> + ContinuousClock)      │
+│  Disseminator (Mutex<DisseminationState>)                   │
+│  SuspicionTimer (actor), SWIMConfiguration, SWIMEvent       │
+│  SWIMTransport (protocol), SWIMMessageAuthenticator         │
+├─────────────────────────────────────────────────────────────┤
+│  SWIMTransportUDP  (import SWIMTransportUDP)                 │
+│  SWIMUDPTransport — built on NIOUDPTransport (swift-nio-udp)│
+├─────────────────────────────────────────────────────────────┤
+│  Tier-3 codec  (import SWIMWire)                            │
+│  MembershipState (caller-locked value-type state machine)   │
+│  Member / MemberID / MemberStatus / Incarnation             │
+│  SWIMMessage / GossipPayload / SWIMMessageCodec             │
+│  DisseminationState / BroadcastQueue, WriteBuffer/ReadBuffer │
+│  - Embedded-clean: no Foundation, no `any`, typed throws    │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-> The failure-detection logic lives in `SWIMCluster` (ping / ping-req / ack
-> orchestration) over the value-type `MembershipState`; there is no separate
-> `FailureDetector` type.
+The failure-detection logic lives in `SWIMCluster` (ping / ping-req / ack
+orchestration) over the value-type `MembershipState`; there is no separate
+`FailureDetector` type. `import SWIM` re-exports only the curated value/identity
+types (`Member` / `MemberID` / `MemberStatus` / `Incarnation`); a protocol
+implementer imports `SWIMWire` for the codec. See `Sources/SWIM/CONTEXT.md` for the
+load-bearing invariants.
 
-## Protocol Flow
-
-### Failure Detection Cycle
+### Protocol flow
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -157,154 +133,95 @@ Sources/SWIMTransportUDP/     # UDP transport (swift-nio-udp)
 │  3. Receive ACK → M is alive                                │
 │  4. No ACK within timeout:                                  │
 │     - Select k random members                               │
-│     - Send PING-REQ(M) to each                              │
-│     - Any ACK received → M is alive                         │
-│     - No ACK → Mark M as SUSPECT                            │
+│     - Send PING-REQ(M) to each                             │
+│     - Any ACK received → M is alive                        │
+│     - No ACK → mark M as SUSPECT                           │
 │  5. Piggyback membership updates on all messages            │
 └─────────────────────────────────────────────────────────────┘
-```
 
-### Member State Transitions
-
-```
      ┌─────────┐
      │  ALIVE  │◄────────────────────────────┐
      └────┬────┘                             │
-          │ No ACK                     ACK or │
+          │ no ack                     ack or │
           │                           refute  │
           ▼                                  │
      ┌─────────┐                             │
      │ SUSPECT │─────────────────────────────┤
      └────┬────┘                             │
-          │ Timeout                          │
+          │ timeout                          │
           ▼                                  │
      ┌─────────┐                             │
      │  DEAD   │─────────────────────────────┘
-     └─────────┘         Rejoin
+     └─────────┘         rejoin
 ```
 
-## Transport Implementation
+### Transport
 
-Implement the `SWIMTransport` protocol to integrate the network layer:
+Implement `SWIMTransport` to integrate the network layer, or use the ready-made
+`SWIMUDPTransport` (from the `SWIMTransportUDP` product, built on swift-nio-udp):
 
 ```swift
 public protocol SWIMTransport: Sendable {
-    /// Send a message
     func send(_ message: SWIMMessage, to member: MemberID) async throws
-
-    /// Stream of incoming messages
     var incomingMessages: AsyncStream<(SWIMMessage, MemberID)> { get }
-
-    /// Local address
     var localAddress: String { get }
 }
 ```
 
-### UDP Implementation Example
+`SWIMMessageCodec.encode` (and `encodeToBytes`) `throw` a typed `SWIMCodecError`
+(e.g. `.stringTooLong`) instead of trapping, so an over-long identifier or address
+cannot crash the encoder.
 
-```swift
-final class UDPTransport: SWIMTransport, Sendable {
-    let localAddress: String
-    let incomingMessages: AsyncStream<(SWIMMessage, MemberID)>
-    private let continuation: AsyncStream<(SWIMMessage, MemberID)>.Continuation
-    private let socket: UDPSocket
+### Wire format
 
-    init(localAddress: String) async throws {
-        self.localAddress = localAddress
+```
+Message header:  Type (1B) | SeqNum (8B)
+Message types:   0x01 Ping (payload) | 0x02 PingRequest (target + payload)
+                 0x03 Ack (target + payload) | 0x04 Nack (target)
 
-        var cont: AsyncStream<(SWIMMessage, MemberID)>.Continuation!
-        self.incomingMessages = AsyncStream { cont = $0 }
-        self.continuation = cont
-
-        self.socket = try await UDPSocket(address: localAddress)
-
-        // Start receiving
-        Task {
-            for await (data, address) in socket.incoming {
-                do {
-                    let message = try SWIMMessageCodec.decode(data)
-                    let sender = MemberID(id: address, address: address)
-                    continuation.yield((message, sender))
-                } catch {
-                    // Drop undecodable datagrams; do not swallow silently in production.
-                    continue
-                }
-            }
-        }
-    }
-
-    func send(_ message: SWIMMessage, to member: MemberID) async throws {
-        let data = try SWIMMessageCodec.encode(message)
-        try await socket.send(data, to: member.address)
-    }
-}
+GossipPayload:   Count (2B) | Updates[]
+                 each update: MemberID len (2B) + ID | Address len (2B) + Address
+                              | Status (1B) | Incarnation (8B)
 ```
 
-> `SWIMMessageCodec.encode` (and `encodeToBytes`) now `throw`. They surface a
-> typed `SWIMCodecError` (e.g. `.stringTooLong`) instead of trapping, so an
-> over-long identifier or address cannot crash the encoder.
-
-## Configuration
+### Configuration
 
 ```swift
 var config = SWIMConfiguration()
-
-// Protocol period (time between probes)
-config.protocolPeriod = .milliseconds(200)
-
-// Ping response timeout
-config.pingTimeout = .milliseconds(100)
-
-// Number of indirect probes
-config.indirectProbeCount = 3
-
-// Suspicion timeout multiplier
-config.suspicionMultiplier = 5.0
-
-// Maximum updates per message
-config.maxPayloadSize = 10
-
-// Base dissemination count (actual = base * log(N))
-config.baseDisseminationLimit = 3
-
-// Maximum plausible forward jump in a gossiped incarnation.
-// Gossip whose incarnation is more than this many steps ahead of the
-// locally known value is rejected (MemberListRejection.incarnationJumpTooLarge)
-// rather than silently trusted. Default: 16
-config.maxIncarnationDelta = 16
-
-// Maximum number of members the table will hold. Bounds memory growth from a
-// flood of (potentially forged) members. Joins beyond this cap are rejected
-// (MemberListRejection.memberTableFull). Default: 10000
-config.maxMemberCount = 10_000
-
-// Optional message authenticator (see "Security" below). Default: nil
-// config.authenticator = MyAuthenticator()
+config.protocolPeriod = .milliseconds(200)     // time between probes
+config.pingTimeout = .milliseconds(100)        // ping response timeout
+config.indirectProbeCount = 3                   // number of indirect probes
+config.suspicionMultiplier = 5.0                // suspicion timeout multiplier
+config.maxPayloadSize = 10                      // max updates per message
+config.baseDisseminationLimit = 3               // base count (actual = base * log(N))
+config.maxIncarnationDelta = 16                 // reject implausible incarnation jumps
+config.maxMemberCount = 10_000                  // cap the member table
+// config.authenticator = MyAuthenticator()     // optional message authentication
 ```
 
 ## Security
 
-SWIM is, by default, an **unauthenticated** gossip protocol: any peer that can
-reach the cluster can forge membership updates (e.g. claim a higher incarnation
-to mark a member dead, or to make itself undetectable). swift-SWIM adds the
-following defenses:
+SWIM is, by default, an **unauthenticated** gossip protocol: any peer that can reach
+the cluster can forge membership updates (e.g. claim a higher incarnation to mark a
+member dead, or to make itself undetectable). swift-SWIM adds these defenses:
 
-- **Refutation safety**: A refuted or recovered member is never erroneously
-  marked dead. The suspicion-kill path requires the *exact* incarnation captured
-  when suspicion started, and every recovery route (direct ack, gossiped
-  recovery, self-refutation) cancels the running suspicion timer so it can never
-  fire a stale kill.
-- **Saturating incarnations**: Incarnation numbers saturate at `UInt64.max`
-  instead of wrapping, so a logical clock can never roll back and let stale
-  state out-rank newer state. Saturation is observable via `Incarnation.isSaturated`.
-- **Heuristic sanity bounds**: `maxIncarnationDelta` rejects implausibly large
-  incarnation jumps and `maxMemberCount` caps the member table. Rejections are
-  surfaced as typed `MemberListRejection` errors, never silently dropped.
-- **Optional message authentication**: Conform to `SWIMMessageAuthenticator`
-  and inject it via `SWIMConfiguration.authenticator`. When set, outgoing
-  messages are signed (`sign(message:)`) and incoming messages are verified
-  (`verify(message:)`) before their gossip is trusted; unverifiable datagrams
-  are rejected.
+- **Refutation safety** — a refuted or recovered member is never erroneously marked
+  dead. The suspicion-kill path requires the *exact* incarnation captured when
+  suspicion started, and every recovery route (direct ack, gossiped recovery,
+  self-refutation) cancels the running suspicion timer so it can never fire a stale kill.
+- **Saturating incarnations** — incarnation numbers saturate at `UInt64.max` instead
+  of wrapping, so a logical clock can never roll back and let stale state out-rank
+  newer state. Saturation is observable via `Incarnation.isSaturated`.
+- **Heuristic sanity bounds** — `maxIncarnationDelta` rejects implausibly large
+  incarnation jumps and `maxMemberCount` caps the member table. The cap is enforced
+  on **both** admission paths: gossiped updates and ping-sender admission (an
+  unauthenticated ping sender is admitted through the same `applyGossip` trust
+  boundary, not the trusting `update` path). Rejections are surfaced as typed
+  `MemberListRejection` errors, never silently dropped.
+- **Optional message authentication** — conform to `SWIMMessageAuthenticator` and
+  inject it via `SWIMConfiguration.authenticator`. When set, outgoing messages are
+  signed and incoming messages verified before their gossip is trusted; unverifiable
+  datagrams are rejected.
 
 ```swift
 struct MyAuthenticator: SWIMMessageAuthenticator {
@@ -316,61 +233,16 @@ var config = SWIMConfiguration()
 config.authenticator = MyAuthenticator()
 ```
 
-> **Residual limitation**: Without an authenticator, SWIM trusts unauthenticated
+> **Residual limitation.** Without an authenticator, SWIM trusts unauthenticated
 > wire data. The `maxIncarnationDelta` and `maxMemberCount` bounds are heuristic
-> sanity limits, **not** authentication. For real protection against forged
-> gossip, configure an `authenticator`.
-
-## Core Types
-
-| Type | Description |
-|------|-------------|
-| `MemberID` | Unique member identifier (ID + address) |
-| `Member` | Member with status and incarnation |
-| `MemberStatus` | Alive, Suspect, Dead |
-| `Incarnation` | Version number for consistency |
-| `MemberList` | Thread-safe member collection |
-| `SWIMMessage` | Protocol messages (Ping, PingReq, Ack, Nack) |
-| `GossipPayload` | Updates piggybacked on messages |
-| `MembershipState` | Caller-locked value-type membership state machine (`SWIMWire`) |
-| `SWIMCluster` | Main protocol orchestration actor |
-| `SWIMTransport` | Network transport protocol |
-| `SWIMUDPTransport` | UDP transport built on swift-nio-udp (`SWIMTransportUDP`) |
-| `SWIMConfiguration` | Protocol parameters and trust bounds |
-| `SWIMMessageAuthenticator` | Optional message-authentication hook |
-| `MemberListRejection` | Typed reasons a gossiped update is rejected |
-| `SWIMCodecError` | Typed encode/decode errors |
-
-## Testing
-
-Test with mock transports:
-
-```swift
-// MockTransport for unit tests
-let transport = MockTransport(localAddress: "127.0.0.1:8000")
-
-// Simulate receiving a message
-transport.receive(message, from: sender)
-
-// Check sent messages
-let sent = transport.getSentMessages()
-
-// LoopbackTransport for integration tests
-let transport1 = LoopbackTransport(localAddress: "127.0.0.1:8000")
-let transport2 = LoopbackTransport(localAddress: "127.0.0.1:8001")
-transport1.connect(to: transport2)
-transport2.connect(to: transport1)
-```
+> sanity limits, **not** authentication. For real protection against forged gossip,
+> configure an `authenticator`.
 
 ## Performance
 
-### Optimization Techniques
-
-- **Zero-copy parsing**: Direct memory access via `UnsafeRawBufferPointer` and non-copyable `ReadBuffer`
-- **@inlinable annotations**: Applied to all encode/decode methods for compiler optimization
-- **Pre-allocation**: `reserveCapacity()` to avoid collection reallocations
-
-### Benchmark Results
+The `SWIMWire` codec is optimized for throughput with minimal allocations: zero-copy
+parsing via `UnsafeRawBufferPointer` and a non-copyable `ReadBuffer`, `@inlinable`
+encode/decode methods, and `reserveCapacity` to avoid reallocations.
 
 Measured on Apple Silicon (M-series):
 
@@ -387,53 +259,39 @@ Measured on Apple Silicon (M-series):
 | Random member selection (3/100) | 324K ops/sec | 3.1 μs |
 | Disseminator enqueue+get | 84K ops/sec | 11.9 μs |
 
-Run benchmarks:
+Run the benchmarks:
+
 ```bash
 swift test --filter Benchmark
 ```
 
-## Wire Format
+## Testing
 
-### Message Header
-```
-┌────────────┬────────────┐
-│ Type (1B)  │ SeqNum(8B) │
-└────────────┴────────────┘
-```
+The `SWIMTests` and `SWIMTransportUDPTests` targets cover the facade, codec, and UDP
+transport. The `Mock` / `Loopback` test transports drive the cluster without a real
+network. Run with a timeout to guard against hangs:
 
-### Message Types
-- 0x01: Ping (payload)
-- 0x02: PingRequest (target + payload)
-- 0x03: Ack (target + payload)
-- 0x04: Nack (target)
+```swift
+// MockTransport for unit tests
+let transport = MockTransport(localAddress: "127.0.0.1:8000")
+transport.receive(message, from: sender)        // simulate an inbound message
+let sent = transport.getSentMessages()           // inspect outbound messages
 
-### GossipPayload Format
-```
-┌────────────┬─────────────────────────────────────────┐
-│ Count (2B) │ Updates[]                               │
-├────────────┼─────────────────────────────────────────┤
-│            │ Each update:                            │
-│            │ ├─ MemberID length (2B) + ID (variable) │
-│            │ ├─ Address length (2B) + Address (var)  │
-│            │ ├─ Status (1B)                          │
-│            │ └─ Incarnation (8B)                     │
-└────────────┴─────────────────────────────────────────┘
+// LoopbackTransport for integration tests
+let transport1 = LoopbackTransport(localAddress: "127.0.0.1:8000")
+let transport2 = LoopbackTransport(localAddress: "127.0.0.1:8001")
+transport1.connect(to: transport2)
+transport2.connect(to: transport1)
 ```
 
-## Concurrency Model
-
-| Component | Model | Reason |
-|-----------|-------|--------|
-| `SWIMCluster` | `actor` | User-facing API, async operations, probe coordination |
-| `MemberList` | `Mutex<MembershipState>` | High-frequency internal access |
-| `Disseminator` | `Mutex<DisseminationState>` | High-frequency internal access |
-| `SuspicionTimer` | `actor` | Async timer management |
-| `MembershipState` | value type (caller-locked) | Embedded-clean: no Mutex/clock/RNG; caller drives it under a lock |
+```bash
+swift test
+```
 
 ## References
 
 - [SWIM Paper (Cornell)](https://www.cs.cornell.edu/projects/Quicksilver/public_pdfs/SWIM.pdf)
-- [Lifeguard (HashiCorp)](https://arxiv.org/abs/1707.00788) - SWIM extensions
+- [Lifeguard (HashiCorp)](https://arxiv.org/abs/1707.00788) — SWIM extensions
 - [memberlist (Go)](https://github.com/hashicorp/memberlist)
 
 ## License
