@@ -2,8 +2,7 @@
 ///
 /// Defines the transport interface for sending and receiving SWIM messages.
 
-import Foundation
-import Synchronization
+import _Concurrency
 import SWIMWire
 
 /// Transport protocol for SWIM messages.
@@ -34,14 +33,43 @@ import SWIMWire
 ///     }
 /// }
 /// ```
+#if hasFeature(Embedded)
+/// The typed error a ``SWIMTransport`` reports from ``SWIMTransport/send(_:to:)``
+/// under Embedded Swift, where untyped `throws` (which erases to `any Error`) is
+/// rejected.
+///
+/// HOST builds keep `send`'s untyped `throws` so existing conformers (e.g.
+/// swift-libp2p's `SWIMTransportAdapter`, which propagates NIO/codec errors) stay
+/// source-compatible.
+public enum SWIMTransportError: Error, Sendable {
+    /// The transport could not deliver the message; `reason` describes why.
+    case sendFailed(reason: String)
+}
+
+extension SWIMTransportError: CustomStringConvertible {
+    public var description: String {
+        switch self {
+        case .sendFailed(let reason):
+            return "SendFailed(\(reason))"
+        }
+    }
+}
+#endif
+
 public protocol SWIMTransport: Sendable {
     /// Sends a message to a member.
     ///
     /// - Parameters:
     ///   - message: The message to send
     ///   - member: The target member's ID
-    /// - Throws: Transport errors if the send fails
+    /// - Throws: Transport errors if the send fails. Untyped on host (so a
+    ///   conformer may surface any backend error); typed ``SWIMTransportError``
+    ///   under Embedded, where untyped `throws` is unavailable.
+    #if !hasFeature(Embedded)
     func send(_ message: SWIMMessage, to member: MemberID) async throws
+    #else
+    func send(_ message: SWIMMessage, to member: MemberID) async throws(SWIMTransportError)
+    #endif
 
     /// Stream of incoming messages.
     ///
@@ -65,7 +93,7 @@ public final class MockTransport: SWIMTransport, Sendable {
     public let incomingMessages: AsyncStream<(SWIMMessage, MemberID)>
 
     private let continuation: AsyncStream<(SWIMMessage, MemberID)>.Continuation
-    private let state: Mutex<MockState>
+    private let state: FacadeLock<MockState>
 
     private struct MockState: Sendable {
         var sentMessages: [(SWIMMessage, MemberID)] = []
@@ -76,18 +104,26 @@ public final class MockTransport: SWIMTransport, Sendable {
     /// - Parameter localAddress: The simulated local address
     public init(localAddress: String = "127.0.0.1:8000") {
         self.localAddress = localAddress
-        self.state = Mutex(MockState())
+        self.state = FacadeLock(MockState())
 
         var cont: AsyncStream<(SWIMMessage, MemberID)>.Continuation!
         self.incomingMessages = AsyncStream { cont = $0 }
         self.continuation = cont
     }
 
+    #if !hasFeature(Embedded)
     public func send(_ message: SWIMMessage, to member: MemberID) async throws {
         state.withLock { state in
             state.sentMessages.append((message, member))
         }
     }
+    #else
+    public func send(_ message: SWIMMessage, to member: MemberID) async throws(SWIMTransportError) {
+        state.withLock { state in
+            state.sentMessages.append((message, member))
+        }
+    }
+    #endif
 
     /// Returns all messages that have been sent.
     public func getSentMessages() -> [(SWIMMessage, MemberID)] {
@@ -126,7 +162,7 @@ public final class LoopbackTransport: SWIMTransport, Sendable {
     public let incomingMessages: AsyncStream<(SWIMMessage, MemberID)>
 
     private let continuation: AsyncStream<(SWIMMessage, MemberID)>.Continuation
-    private let state: Mutex<LoopbackState>
+    private let state: FacadeLock<LoopbackState>
 
     private struct LoopbackState: Sendable {
         var peers: [String: LoopbackTransport] = [:]
@@ -138,7 +174,7 @@ public final class LoopbackTransport: SWIMTransport, Sendable {
     /// - Parameter localAddress: The address of this node
     public init(localAddress: String) {
         self.localAddress = localAddress
-        self.state = Mutex(LoopbackState())
+        self.state = FacadeLock(LoopbackState())
 
         var cont: AsyncStream<(SWIMMessage, MemberID)>.Continuation!
         self.incomingMessages = AsyncStream { cont = $0 }
@@ -155,6 +191,7 @@ public final class LoopbackTransport: SWIMTransport, Sendable {
         state.withLock { $0.localMemberID = memberID }
     }
 
+    #if !hasFeature(Embedded)
     public func send(_ message: SWIMMessage, to member: MemberID) async throws {
         let (peer, senderID) = state.withLock { state -> (LoopbackTransport?, MemberID) in
             let peer = state.peers[member.address]
@@ -169,6 +206,22 @@ public final class LoopbackTransport: SWIMTransport, Sendable {
 
         peer.receive(message, from: senderID)
     }
+    #else
+    public func send(_ message: SWIMMessage, to member: MemberID) async throws(SWIMTransportError) {
+        let (peer, senderID) = state.withLock { state -> (LoopbackTransport?, MemberID) in
+            let peer = state.peers[member.address]
+            // Use configured MemberID if set, otherwise generate from address
+            let id = state.localMemberID ?? MemberID(id: localAddress, address: localAddress)
+            return (peer, id)
+        }
+
+        guard let peer else {
+            throw SWIMTransportError.sendFailed(reason: "No peer at \(member.address)")
+        }
+
+        peer.receive(message, from: senderID)
+    }
+    #endif
 
     /// Connects this transport to another loopback transport.
     ///

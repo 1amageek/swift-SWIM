@@ -4,13 +4,13 @@
 ///
 /// ## Caller-locked adapter
 ///
-/// This is the host-side adapter over the Embedded-clean value-type
-/// `SWIMWire.DisseminationState`. It owns the `Synchronization.Mutex`; every
-/// public method delegates to the value type's `mutating` methods under the lock,
-/// so `Disseminator` keeps its existing `Sendable`, thread-safe behavior. The
-/// value type has no Mutex, no clock, and no Foundation.
+/// This is the caller-locked adapter over the Embedded-clean value-type
+/// `SWIMWire.DisseminationState`. It owns the ``FacadeLock`` (host:
+/// `Synchronization.Mutex`; Embedded: an `Atomic`-spinlock box); every public
+/// method delegates to the value type's `mutating` methods under the lock, so
+/// `Disseminator` keeps its existing `Sendable`, thread-safe behavior. The value
+/// type has no lock, no clock, and no Foundation.
 
-import Synchronization
 import SWIMWire
 
 /// Manages gossip dissemination.
@@ -19,7 +19,7 @@ import SWIMWire
 /// piggybacked on protocol messages. Updates are sent multiple times (controlled
 /// by `disseminationLimit`) to ensure reliable propagation.
 public final class Disseminator: Sendable {
-    private let state: Mutex<DisseminationState>
+    private let state: FacadeLock<DisseminationState>
 
     /// Creates a new disseminator.
     ///
@@ -27,7 +27,7 @@ public final class Disseminator: Sendable {
     ///   - maxPayloadSize: Maximum number of updates per message
     ///   - disseminationLimit: Initial number of times to send each update
     public init(maxPayloadSize: Int = 10, disseminationLimit: Int = 6) {
-        self.state = Mutex(
+        self.state = FacadeLock(
             DisseminationState(
                 maxPayloadSize: maxPayloadSize,
                 disseminationLimit: disseminationLimit

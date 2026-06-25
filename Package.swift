@@ -16,6 +16,14 @@ let coreSettings: [SwiftSetting] = {
     return s
 }()
 
+// The SWIM facade additionally needs the `Extern` feature: under Embedded Swift
+// the suspicion-timeout / dissemination-limit math binds the C math library's
+// `log` / `ceil` via `@_extern(c, …)` (Foundation is not importable there). Enabled
+// in both modes so the facade compiles identically host + Embedded.
+let facadeSettings: [SwiftSetting] = coreSettings + [
+    .enableExperimentalFeature("Extern")
+]
+
 let package = Package(
     name: "swift-SWIM",
     platforms: [
@@ -74,7 +82,8 @@ let package = Package(
             name: "SWIM",
             dependencies: ["SWIMWire"],
             path: "Sources/SWIM",
-            exclude: ["CONTEXT.md"]
+            exclude: ["CONTEXT.md"],
+            swiftSettings: facadeSettings
         ),
 
         // UDP Transport using swift-nio-udp. Depends on SWIMWire directly for the

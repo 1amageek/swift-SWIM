@@ -70,8 +70,16 @@ extension SWIMEvent: CustomStringConvertible {
 
 /// Errors that can occur in the SWIM protocol.
 public enum SWIMError: Error, Sendable {
+    #if !hasFeature(Embedded)
     /// Failed to send a message.
+    ///
+    /// HOST-ONLY: the `underlying` payload is an `any Error` existential, rejected
+    /// under Embedded Swift. This case is not constructed anywhere in the
+    /// orchestrator (the send paths surface `joinFailed`/`transportError` with a
+    /// formatted detail string instead), so gating it out of Embedded changes no
+    /// behavior.
     case sendFailed(to: MemberID, underlying: Error)
+    #endif
 
     /// Join operation failed.
     case joinFailed(reason: String)
@@ -86,8 +94,10 @@ public enum SWIMError: Error, Sendable {
 extension SWIMError: CustomStringConvertible {
     public var description: String {
         switch self {
+        #if !hasFeature(Embedded)
         case .sendFailed(let to, let error):
             return "SendFailed(to: \(to), error: \(error))"
+        #endif
         case .joinFailed(let reason):
             return "JoinFailed(\(reason))"
         case .transportError(let msg):

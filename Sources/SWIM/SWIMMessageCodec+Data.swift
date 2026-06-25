@@ -1,15 +1,18 @@
 // SWIMMessageCodec+Data.swift
 //
 // Host-only Foundation `Data` conveniences over the Embedded-clean SWIMWire codec
-// (§2.6.1). Gated by `#if canImport(Foundation)` so the Embedded build never
-// compiles them. Each is a THIN wrapper over the `[UInt8]` primary API with
-// exactly one bulk conversion at the call boundary (`Data(bytes)` /
-// `data.withUnsafeBytes`), never an element-wise append loop.
+// (§2.6.1). Gated by `#if !hasFeature(Embedded)` so the Embedded build never
+// compiles them. (NOT `#if canImport(Foundation)`: on the macOS host SDK
+// `canImport(Foundation)` is still TRUE under Embedded, yet importing the ObjC
+// Foundation module fails to build — so the gate must key off the Embedded
+// feature, not Foundation availability.) Each is a THIN wrapper over the `[UInt8]`
+// primary API with exactly one bulk conversion at the call boundary (`Data(bytes)`
+// / `data.withUnsafeBytes`), never an element-wise append loop.
 //
 // The primary, Embedded-clean byte API (`[UInt8]` / `UnsafeRawBufferPointer`)
 // lives in SWIMWire; these overloads add `Data` ergonomics for Apple developers.
 
-#if canImport(Foundation)
+#if !hasFeature(Embedded)
 import Foundation
 import SWIMWire
 

@@ -1,8 +1,14 @@
 /// SWIM Suspicion Timer
 ///
 /// Manages suspicion timeouts for members in the suspect state.
+///
+/// The timer drives its deadlines through the injected ``SWIMClock`` seam
+/// (``SWIMClock/monotonicNanos()`` + ``SWIMClock/sleep(untilNanos:)``) instead of
+/// `Task.sleep(for:)` + `ContinuousClock`, both of which are unavailable under
+/// Embedded Swift. Observable behavior (cancel-on-refute, exactly-once kill) is
+/// unchanged.
 
-import Foundation
+import _Concurrency
 import SWIMWire
 
 /// Manages suspicion timeouts.
@@ -10,6 +16,10 @@ import SWIMWire
 /// When a member becomes suspect, a timer is started. If the member
 /// doesn't prove itself alive before the timer expires, it's marked dead.
 public actor SuspicionTimer {
+    /// The monotonic clock + sleep seam used to schedule expirations
+    /// (`any SWIMClock`).
+    private let clock: any SWIMClock
+
     /// An active suspicion: the timer task plus the incarnation captured when
     /// suspicion started. The captured incarnation is used by the kill path to
     /// enforce that only a *still-suspect, same-incarnation* member can be marked
@@ -21,9 +31,24 @@ public actor SuspicionTimer {
 
     private var suspicions: [MemberID: Suspicion]
 
-    /// Creates a new suspicion timer.
+    #if !hasFeature(Embedded)
+    /// Creates a new suspicion timer backed by the host system clock.
+    ///
+    /// HOST-ONLY default: ``SystemSWIMClock`` does not exist under Embedded, so an
+    /// Embedded caller must use ``init(clock:)`` and inject its own clock.
     public init() {
         self.suspicions = [:]
+        self.clock = SystemSWIMClock()
+    }
+    #endif
+
+    /// Creates a new suspicion timer driven by the given clock seam.
+    ///
+    /// - Parameter clock: The monotonic clock + sleep seam used to schedule
+    ///   suspicion expirations.
+    public init(clock: any SWIMClock) {
+        self.suspicions = [:]
+        self.clock = clock
     }
 
     /// Starts a suspicion timer for a member.
@@ -47,10 +72,15 @@ public actor SuspicionTimer {
         // Cancel existing timer if any
         suspicions[member]?.task.cancel()
 
+        // Compute the absolute deadline on the clock's monotonic timeline so the
+        // wait is driven through the seam rather than `Task.sleep(for:)`.
+        let deadline = clock.monotonicNanos() &+ timeout.swimNanos
+        let clock = self.clock
+
         // Start new timer
         let task = Task {
             do {
-                try await Task.sleep(for: timeout)
+                try await clock.sleep(untilNanos: deadline)
                 // Timer expired (not refuted): invoke kill with captured incarnation.
                 onExpired(incarnation)
             } catch {

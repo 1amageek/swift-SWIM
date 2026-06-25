@@ -2,8 +2,36 @@
 ///
 /// Configuration options for the SWIM protocol cluster.
 
-import Foundation
 import SWIMWire
+
+// `log` / `ceil` come from the platform C math library. On host they are reached
+// through `Foundation`; under Embedded Swift (where `Foundation` is not
+// importable) they are bound directly via `@_extern(c, …)` so the suspicion-timeout
+// and dissemination-limit math stays byte-for-byte identical across both builds.
+#if !hasFeature(Embedded)
+import Foundation
+#else
+@_extern(c, "log") private func swimNaturalLog(_ x: Double) -> Double
+@_extern(c, "ceil") private func swimCeil(_ x: Double) -> Double
+#endif
+
+/// Natural logarithm, sourced from the platform C math library on both builds.
+private func swimLog(_ x: Double) -> Double {
+    #if !hasFeature(Embedded)
+    return Foundation.log(x)
+    #else
+    return swimNaturalLog(x)
+    #endif
+}
+
+/// Ceiling, sourced from the platform C math library on both builds.
+private func swimCeiling(_ x: Double) -> Double {
+    #if !hasFeature(Embedded)
+    return Foundation.ceil(x)
+    #else
+    return swimCeil(x)
+    #endif
+}
 
 /// Strategy for selecting probe targets.
 public enum ProbeSelectionStrategy: Sendable {
@@ -110,6 +138,7 @@ public struct SWIMConfiguration: Sendable {
     /// Default: 10000
     public var maxMemberCount: Int
 
+    #if !hasFeature(Embedded)
     /// Optional message authenticator.
     ///
     /// When set, outgoing messages are signed and incoming messages are verified
@@ -118,9 +147,16 @@ public struct SWIMConfiguration: Sendable {
     /// and only the heuristic sanity bounds (``maxIncarnationDelta`` and
     /// ``maxMemberCount``) protect the trust boundary.
     ///
+    /// HOST-ONLY: the authenticator is an `any SWIMMessageAuthenticator`
+    /// existential, which is rejected under Embedded Swift. The Embedded build
+    /// runs in unauthenticated mode (sanity bounds only); a future Embedded port
+    /// would thread a concrete generic authenticator instead.
+    ///
     /// Default: `nil`
     public var authenticator: (any SWIMMessageAuthenticator)?
+    #endif
 
+    #if !hasFeature(Embedded)
     /// Creates a new configuration with the given values.
     public init(
         protocolPeriod: Duration = .milliseconds(200),
@@ -147,6 +183,33 @@ public struct SWIMConfiguration: Sendable {
         self.maxMemberCount = maxMemberCount
         self.authenticator = authenticator
     }
+    #else
+    /// Creates a new configuration with the given values (Embedded: no
+    /// authenticator — see the host `authenticator` property).
+    public init(
+        protocolPeriod: Duration = .milliseconds(200),
+        pingTimeout: Duration = .milliseconds(100),
+        indirectProbeCount: Int = 3,
+        suspicionMultiplier: Double = 5.0,
+        maxPayloadSize: Int = 10,
+        baseDisseminationLimit: Int = 3,
+        deadMemberRetention: Duration = .seconds(30),
+        probeSelectionStrategy: ProbeSelectionStrategy = .roundRobin,
+        maxIncarnationDelta: UInt64 = 16,
+        maxMemberCount: Int = 10_000
+    ) {
+        self.protocolPeriod = protocolPeriod
+        self.pingTimeout = pingTimeout
+        self.indirectProbeCount = indirectProbeCount
+        self.suspicionMultiplier = suspicionMultiplier
+        self.maxPayloadSize = maxPayloadSize
+        self.baseDisseminationLimit = baseDisseminationLimit
+        self.deadMemberRetention = deadMemberRetention
+        self.probeSelectionStrategy = probeSelectionStrategy
+        self.maxIncarnationDelta = maxIncarnationDelta
+        self.maxMemberCount = maxMemberCount
+    }
+    #endif
 
     /// Default configuration suitable for most use cases.
     public static let `default` = SWIMConfiguration()
@@ -200,7 +263,7 @@ public struct SWIMConfiguration: Sendable {
     /// - Parameter memberCount: Current number of members in the cluster
     /// - Returns: The suspicion timeout duration
     public func suspicionTimeout(memberCount: Int) -> Duration {
-        let logN = max(1.0, log(Double(max(1, memberCount))))
+        let logN = max(1.0, swimLog(Double(max(1, memberCount))))
         let multiplied = logN * suspicionMultiplier
         return protocolPeriod * multiplied
     }
@@ -210,8 +273,8 @@ public struct SWIMConfiguration: Sendable {
     /// - Parameter memberCount: Current number of members in the cluster
     /// - Returns: Number of times to send each update
     public func disseminationLimit(memberCount: Int) -> Int {
-        let logN = max(1.0, log(Double(max(1, memberCount))))
-        return Int(ceil(Double(baseDisseminationLimit) * logN))
+        let logN = max(1.0, swimLog(Double(max(1, memberCount))))
+        return Int(swimCeiling(Double(baseDisseminationLimit) * logN))
     }
 }
 

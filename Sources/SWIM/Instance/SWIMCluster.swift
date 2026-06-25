@@ -2,7 +2,7 @@
 ///
 /// Tier-1 orchestration actor that coordinates failure detection and gossip.
 
-import Foundation
+import _Concurrency
 import SWIMWire
 
 /// The SWIM cluster orchestration actor.
@@ -36,7 +36,12 @@ public actor SWIMCluster {
     private let memberList: MemberList
     private let disseminator: Disseminator
     private let suspicionTimer: SuspicionTimer
+    /// Transport for sending/receiving messages (`any SWIMTransport`).
     private let transport: any SWIMTransport
+    /// The monotonic clock + sleep seam that drives the protocol period, ping
+    /// timeout, and suspicion timeout (`any SWIMClock`) — instead of
+    /// `Task.sleep(for:)` + `ContinuousClock`, both unavailable under Embedded.
+    private let clock: any SWIMClock
 
     private var localMember: Member
     private var protocolTask: Task<Void, Never>?
@@ -92,7 +97,12 @@ public actor SWIMCluster {
 
     // MARK: - Initialization
 
-    /// Creates a new SWIM instance.
+    #if !hasFeature(Embedded)
+    /// Creates a new SWIM instance backed by the host system clock.
+    ///
+    /// HOST-ONLY: ``SystemSWIMClock`` does not exist under Embedded; an Embedded
+    /// caller must use ``init(localMember:config:transport:clock:)`` and inject
+    /// its own clock.
     ///
     /// - Parameters:
     ///   - localMember: The local member (this node)
@@ -103,15 +113,38 @@ public actor SWIMCluster {
         config: SWIMConfiguration = .default,
         transport: any SWIMTransport
     ) {
+        self.init(
+            localMember: localMember,
+            config: config,
+            transport: transport,
+            clock: SystemSWIMClock()
+        )
+    }
+    #endif
+
+    /// Creates a new SWIM instance driven by the given clock seam.
+    ///
+    /// - Parameters:
+    ///   - localMember: The local member (this node)
+    ///   - config: SWIM configuration
+    ///   - transport: Transport for sending/receiving messages
+    ///   - clock: The monotonic clock + sleep seam that drives all timers.
+    public init(
+        localMember: Member,
+        config: SWIMConfiguration = .default,
+        transport: any SWIMTransport,
+        clock: any SWIMClock
+    ) {
         self.localMember = localMember
         self.config = config
         self.transport = transport
-        self.memberList = MemberList(members: [localMember])
+        self.clock = clock
+        self.memberList = MemberList(members: [localMember], clock: clock)
         self.disseminator = Disseminator(
             maxPayloadSize: config.maxPayloadSize,
             disseminationLimit: config.disseminationLimit(memberCount: 1)
         )
-        self.suspicionTimer = SuspicionTimer()
+        self.suspicionTimer = SuspicionTimer(clock: clock)
 
         // Create event stream
         var continuation: AsyncStream<SWIMEvent>.Continuation!
@@ -130,17 +163,27 @@ public actor SWIMCluster {
         guard !isRunning else { return }
         isRunning = true
 
-        // Start receiving messages
+        // Start receiving messages.
+        //
+        // Capture: `weak self` on host (so an un-shut-down cluster can still
+        // deinit); Embedded has no weak references, so `self` is captured
+        // strongly. The retain cycle this creates is broken by `shutdown()`,
+        // which cancels both stored tasks — `receiveLoop`'s `for await` returns
+        // on cancellation and `protocolLoop` checks `Task.isCancelled` — so the
+        // captures release and the actor can deinit.
+        #if hasFeature(Embedded)
+        receiveTask = Task { await self.receiveLoop() }
+        protocolTask = Task { await self.protocolLoop() }
+        #else
         receiveTask = Task { [weak self] in
             guard let self else { return }
             await self.receiveLoop()
         }
-
-        // Start protocol loop
         protocolTask = Task { [weak self] in
             guard let self else { return }
             await self.protocolLoop()
         }
+        #endif
     }
 
     /// Shuts down the SWIM protocol.
@@ -184,7 +227,10 @@ public actor SWIMCluster {
 
         var joinedAny = false
         var validSeeds = 0
-        var sendErrors: [(MemberID, Error)] = []
+        // Collect formatted failure details (not `any Error`, which is rejected
+        // under Embedded). The caught error is the transport's typed/untyped error;
+        // it is formatted into the detail string immediately.
+        var sendErrorDetails: [String] = []
 
         for seed in seeds {
             // Skip ourselves
@@ -205,7 +251,7 @@ public actor SWIMCluster {
                 joinedAny = true
             } catch {
                 // Aggregate the failure and try the next seed.
-                sendErrors.append((seed, error))
+                sendErrorDetails.append("\(seed.address): \(error)")
                 continue
             }
         }
@@ -220,9 +266,7 @@ public actor SWIMCluster {
         // We had peers to contact but could reach none of them. Surface the
         // aggregated underlying errors instead of silently no-op'ing.
         if !joinedAny {
-            let detail = sendErrors
-                .map { "\($0.0.address): \($0.1)" }
-                .joined(separator: "; ")
+            let detail = sendErrorDetails.joined(separator: "; ")
             throw SWIMError.joinFailed(
                 reason: "Could not contact any of \(validSeeds) seed member(s) [\(detail)]"
             )
@@ -249,12 +293,13 @@ public actor SWIMCluster {
         let payload = GossipPayload(updates: [update])
         let ping = SWIMMessage.ping(sequenceNumber: 0, payload: payload)
 
-        var sendErrors: [(MemberID, Error)] = []
+        // Collect formatted failure details (not `any Error`; see `join`).
+        var sendErrorDetails: [String] = []
         for target in targets {
             do {
                 try await transport.send(ping, to: target.id)
             } catch {
-                sendErrors.append((target.id, error))
+                sendErrorDetails.append("\(target.id.address): \(error)")
                 continue
             }
         }
@@ -265,10 +310,8 @@ public actor SWIMCluster {
         // the caller knows the departure may not have fully propagated.
         try await shutdown()
 
-        if !targets.isEmpty && sendErrors.count == targets.count {
-            let detail = sendErrors
-                .map { "\($0.0.address): \($0.1)" }
-                .joined(separator: "; ")
+        if !targets.isEmpty && sendErrorDetails.count == targets.count {
+            let detail = sendErrorDetails.joined(separator: "; ")
             throw SWIMError.transportError(
                 "Failed to propagate leave to any of \(targets.count) member(s) [\(detail)]"
             )
@@ -293,11 +336,14 @@ public actor SWIMCluster {
     // MARK: - Protocol Loop
 
     private func protocolLoop() async {
+        let periodNanos = config.protocolPeriod.swimNanos
         while isRunning && !Task.isCancelled {
             await runProtocolPeriod()
 
+            // Park for one protocol period on the clock seam (not Task.sleep).
+            let deadline = clock.monotonicNanos() &+ periodNanos
             do {
-                try await Task.sleep(for: config.protocolPeriod)
+                try await clock.sleep(untilNanos: deadline)
             } catch {
                 break
             }
@@ -409,20 +455,39 @@ public actor SWIMCluster {
             return .timeout
         }
 
+        // Capture the deadline on the clock seam before suspending.
+        let deadline = clock.monotonicNanos() &+ timeout.swimNanos
+        let clock = self.clock
+
         return await withCheckedContinuation { (continuation: CheckedContinuation<ProbeResult, Never>) in
             pending.continuation = continuation
 
             // Single timeout task: resumes with `.timeout` exactly once if no
             // ack arrives first. Cancellation of this task (on ack) is benign.
+            // Capture is `weak self` on host; Embedded has no weak references, so
+            // `self` is captured strongly — the task is short-lived (one sleep)
+            // and is cancelled on ack/shutdown, so no lasting cycle.
+            #if hasFeature(Embedded)
+            pending.timeoutTask = Task {
+                do {
+                    try await clock.sleep(untilNanos: deadline)
+                } catch {
+                    // Cancelled (ack arrived first): the ack path already resumed.
+                    return
+                }
+                await self.resolveProbe(sequenceNumber: sequenceNumber, result: .timeout)
+            }
+            #else
             pending.timeoutTask = Task { [weak self] in
                 do {
-                    try await Task.sleep(for: timeout)
+                    try await clock.sleep(untilNanos: deadline)
                 } catch {
                     // Cancelled (ack arrived first): the ack path already resumed.
                     return
                 }
                 await self?.resolveProbe(sequenceNumber: sequenceNumber, result: .timeout)
             }
+            #endif
         }
     }
 
@@ -516,6 +581,21 @@ public actor SWIMCluster {
             // refutation in the meantime invalidates the pending kill.
             let suspectedIncarnation = member.incarnation
             let timeout = config.suspicionTimeout(memberCount: memberList.count)
+            // The expiry callback hops back onto the actor to run the kill.
+            // Capture is `weak self` on host; Embedded has no weak references, so
+            // `self` is captured strongly. The callback only fires once (on
+            // timeout) or never (on cancel), so it holds no lasting cycle.
+            #if hasFeature(Embedded)
+            await suspicionTimer.startSuspicion(
+                for: member.id,
+                incarnation: suspectedIncarnation,
+                timeout: timeout
+            ) { capturedIncarnation in
+                Task {
+                    await self.markDead(member.id, suspectedIncarnation: capturedIncarnation)
+                }
+            }
+            #else
             await suspicionTimer.startSuspicion(
                 for: member.id,
                 incarnation: suspectedIncarnation,
@@ -525,6 +605,7 @@ public actor SWIMCluster {
                     await self?.markDead(member.id, suspectedIncarnation: capturedIncarnation)
                 }
             }
+            #endif
         }
     }
 
@@ -574,12 +655,18 @@ public actor SWIMCluster {
         // that fails verification before its gossip is trusted or it is acted
         // upon. Without an authenticator, this falls through to the traditional
         // unauthenticated mode (protected only by the gossip sanity bounds).
+        //
+        // HOST-ONLY: the pluggable authenticator is an `any` existential, gated out
+        // of the Embedded build (see `SWIMConfiguration.authenticator`). The
+        // Embedded build always runs unauthenticated (sanity bounds only).
+        #if !hasFeature(Embedded)
         if let authenticator = config.authenticator, !authenticator.verify(message: message) {
             eventContinuation.yield(.error(.protocolError(
                 "Rejected unverifiable message from \(sender)"
             )))
             return
         }
+        #endif
 
         // Process gossip payload first
         if let payload = message.payload {
@@ -618,12 +705,9 @@ public actor SWIMCluster {
                 maxIncarnationDelta: config.maxIncarnationDelta,
                 maxMemberCount: config.maxMemberCount
             )
-        } catch let rejection as MemberListRejection {
-            eventContinuation.yield(.error(.protocolError(
-                "Rejected ping sender: \(rejection)"
-            )))
-            change = nil
         } catch {
+            // `applyGossip` is typed-throws `MemberListRejection`, so `error` is
+            // exactly that rejection — no dynamic cast (unavailable under Embedded).
             eventContinuation.yield(.error(.protocolError(
                 "Rejected ping sender: \(error)"
             )))
@@ -681,9 +765,27 @@ public actor SWIMCluster {
             return
         }
 
-        // Spawn background task to wait for ack (non-blocking)
-        // This allows receiveLoop to continue processing messages
+        // Spawn background task to wait for ack (non-blocking).
+        // This allows receiveLoop to continue processing messages. Capture is
+        // `weak self` on host; Embedded has no weak references, so `self` is
+        // captured strongly — the task awaits one ack/timeout and then returns,
+        // so it holds no lasting cycle.
         let pingTimeout = config.pingTimeout
+        #if hasFeature(Embedded)
+        Task {
+            let result = await self.waitForAck(
+                sequenceNumber: probeSeq,
+                timeout: pingTimeout
+            )
+            await self.completeIndirectProbe(
+                originalSeq: sequenceNumber,
+                probeSeq: probeSeq,
+                target: target,
+                requester: sender,
+                result: result
+            )
+        }
+        #else
         Task { [weak self] in
             guard let self else { return }
 
@@ -702,6 +804,7 @@ public actor SWIMCluster {
                 result: result
             )
         }
+        #endif
     }
 
     /// Completes an indirect probe by sending response to requester.
@@ -785,12 +888,10 @@ public actor SWIMCluster {
                     maxIncarnationDelta: config.maxIncarnationDelta,
                     maxMemberCount: config.maxMemberCount
                 )
-            } catch let rejection as MemberListRejection {
-                eventContinuation.yield(.error(.protocolError(
-                    "Rejected gossip: \(rejection)"
-                )))
-                continue
             } catch {
+                // `applyGossip` is typed-throws `MemberListRejection`, so `error`
+                // is exactly that rejection — no dynamic cast (unavailable under
+                // Embedded).
                 eventContinuation.yield(.error(.protocolError(
                     "Rejected gossip: \(error)"
                 )))

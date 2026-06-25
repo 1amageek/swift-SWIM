@@ -8,7 +8,14 @@
 /// requirement. Only `verify` is consumed by the orchestration layer; the
 /// concrete HMAC authenticator (using the `MessageAuthenticationCode` seam) is
 /// also an adapter concern.
+//
+// HOST-ONLY: this protocol is consumed only through the `any SWIMMessageAuthenticator`
+// existential on `SWIMConfiguration`, which is rejected under Embedded Swift, so
+// the whole file is gated `#if !hasFeature(Embedded)`. (Its `sign` requirement
+// also uses untyped `throws`, itself unavailable under Embedded.) The Embedded
+// build runs SWIM in unauthenticated mode (sanity bounds only).
 
+#if !hasFeature(Embedded)
 import SWIMWire
 
 /// Authenticates SWIM datagrams.
@@ -52,3 +59,4 @@ public protocol SWIMMessageAuthenticator: Sendable {
     /// - Returns: `true` if the message is authentic and may be trusted.
     func verify(message: SWIMMessage) -> Bool
 }
+#endif

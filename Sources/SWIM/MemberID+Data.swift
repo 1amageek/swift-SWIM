@@ -1,12 +1,16 @@
 // MemberID+Data.swift
 //
 // Host-only Foundation conveniences for the Embedded-clean `MemberID` value type
-// (§2.6.1). Gated by `#if canImport(Foundation)` so the Embedded build never
-// compiles them. `MemberID` itself, plus its `[UInt8]` byte currency
-// (`encodedBytes()` / `init(bytes:)`), live in SWIMWire (Foundation-free); these
-// add `Data` ergonomics for Apple developers as thin one-bulk-copy wrappers.
+// (§2.6.1). Gated by `#if !hasFeature(Embedded)` so the Embedded build never
+// compiles them. (NOT `#if canImport(Foundation)`: on the macOS host SDK
+// `canImport(Foundation)` is still TRUE under Embedded, yet importing the ObjC
+// Foundation module fails to build — so the gate must key off the Embedded
+// feature, not Foundation availability.) `MemberID` itself, plus its `[UInt8]`
+// byte currency (`encodedBytes()` / `init(bytes:)`), live in SWIMWire
+// (Foundation-free); these add `Data` ergonomics for Apple developers as thin
+// one-bulk-copy wrappers.
 
-#if canImport(Foundation)
+#if !hasFeature(Embedded)
 import Foundation
 import SWIMWire
 

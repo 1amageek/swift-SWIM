@@ -5,23 +5,24 @@
 ///
 /// ## Caller-locked + clock-seam adapter
 ///
-/// This is the host-side adapter over the Embedded-clean value-type state machine
-/// `SWIMWire.MembershipState`. It owns the two things the core deliberately does
-/// NOT:
+/// This is the caller-locked adapter over the Embedded-clean value-type state
+/// machine `SWIMWire.MembershipState`. It owns the two things the core
+/// deliberately does NOT:
 ///
-/// 1. **Synchronization** — a `Synchronization.Mutex` wraps the value type; every
-///    public method delegates to the core's `mutating` methods under the lock, so
+/// 1. **Synchronization** — a ``FacadeLock`` wraps the value type (host:
+///    `Synchronization.Mutex`; Embedded: an `Atomic`-spinlock box); every public
+///    method delegates to the core's `mutating` methods under the lock, so
 ///    `MemberList` keeps its existing `Sendable`, thread-safe behavior.
 /// 2. **The clock** — the core takes a monotonic `nowMillis` parameter instead of
-///    reading a clock. This adapter reads `ContinuousClock` (relative to a fixed
-///    epoch captured at init) and injects the milliseconds value.
+///    reading a clock. This adapter reads the injected ``SWIMClock`` (relative to
+///    a fixed epoch captured at init) and injects the milliseconds value, instead
+///    of `ContinuousClock` which is unavailable under Embedded.
 /// 3. **Randomness** — the core exposes deterministic candidate enumeration; the
 ///    random probe selectors here pick from those candidates with the system RNG.
 ///
 /// Observable behavior is identical to the previous Mutex/ContinuousClock-backed
 /// implementation.
 
-import Synchronization
 import SWIMWire
 
 /// Thread-safe member list for SWIM protocol.
@@ -31,22 +32,21 @@ import SWIMWire
 /// - Random member selection for probing
 /// - Status-based queries
 public final class MemberList: Sendable {
+    /// The monotonic clock seam (`any SWIMClock`). `nowMillis()` is measured
+    /// relative to the epoch captured at init.
+    private let clock: any SWIMClock
 
-    private let state: Mutex<MembershipState>
+    private let state: FacadeLock<MembershipState>
 
-    /// Monotonic epoch captured at init. `nowMillis()` is measured relative to
-    /// this so the core's GC arithmetic stays in a plain `UInt64` millis domain.
-    private let epoch: ContinuousClock.Instant
+    /// Monotonic epoch (nanoseconds) captured at init.
+    private let epochNanos: UInt64
 
-    /// Current monotonic time in milliseconds since `epoch`.
+    /// Current monotonic time in milliseconds since the epoch.
     private func nowMillis() -> UInt64 {
-        let elapsed = ContinuousClock.now - epoch
-        let components = elapsed.components
-        // seconds * 1000 + attoseconds / 1e15, saturating (never negative since
-        // ContinuousClock is monotonic and epoch precedes now).
-        let secondsMillis = UInt64(max(0, components.seconds)) &* 1000
-        let attoMillis = UInt64(max(0, components.attoseconds) / 1_000_000_000_000_000)
-        return secondsMillis &+ attoMillis
+        // Saturating, never negative since the clock is monotonic and the epoch
+        // precedes now.
+        let elapsed = clock.monotonicNanos() &- epochNanos
+        return elapsed / 1_000_000
     }
 
     /// Converts a retention `Duration` to milliseconds (saturating, non-negative).
@@ -58,16 +58,30 @@ public final class MemberList: Sendable {
         return secondsMillis &+ attoMillis
     }
 
-    /// Creates an empty member list.
-    public init() {
-        self.epoch = ContinuousClock.now
-        self.state = Mutex(MembershipState())
+    #if !hasFeature(Embedded)
+    /// Creates an empty member list backed by the host system clock.
+    public convenience init() {
+        self.init(clock: SystemSWIMClock())
     }
 
-    /// Creates a member list with initial members.
-    public init(members: [Member]) {
-        self.epoch = ContinuousClock.now
-        self.state = Mutex(MembershipState(members: members))
+    /// Creates a member list with initial members backed by the host system clock.
+    public convenience init(members: [Member]) {
+        self.init(members: members, clock: SystemSWIMClock())
+    }
+    #endif
+
+    /// Creates an empty member list driven by the given clock seam.
+    public init(clock: any SWIMClock) {
+        self.clock = clock
+        self.epochNanos = clock.monotonicNanos()
+        self.state = FacadeLock(MembershipState())
+    }
+
+    /// Creates a member list with initial members driven by the given clock seam.
+    public init(members: [Member], clock: any SWIMClock) {
+        self.clock = clock
+        self.epochNanos = clock.monotonicNanos()
+        self.state = FacadeLock(MembershipState(members: members))
     }
 
     // MARK: - Query Operations
@@ -191,9 +205,9 @@ public final class MemberList: Sendable {
         _ member: Member,
         maxIncarnationDelta: UInt64?,
         maxMemberCount: Int?
-    ) throws -> MembershipChange? {
+    ) throws(MemberListRejection) -> MembershipChange? {
         let now = nowMillis()
-        return try state.withLock { state in
+        return try state.withLock { (state) throws(MemberListRejection) in
             try state.applyGossip(
                 member,
                 maxIncarnationDelta: maxIncarnationDelta,
@@ -239,7 +253,7 @@ public final class MemberList: Sendable {
 
 extension MemberList: CustomStringConvertible {
     public var description: String {
-        let (total, alive, suspect) = state.withLock { state in
+        let (total, alive, suspect) = state.withLock { (state) -> (Int, Int, Int) in
             (state.count, state.aliveCount, state.suspectCount)
         }
         return "MemberList(total: \(total), alive: \(alive), suspect: \(suspect))"
