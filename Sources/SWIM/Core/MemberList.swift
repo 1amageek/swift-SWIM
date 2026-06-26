@@ -122,48 +122,55 @@ public final class MemberList<Clock: SWIMClock>: Sendable {
 
     /// Returns a random alive member, excluding specified IDs.
     public func randomAliveMember(excluding: Set<MemberID> = []) -> Member? {
-        state.withLock { state in
-            let candidates = state.aliveCandidates(excluding: excluding)
-            guard let id = candidates.randomElement() else { return nil }
-            return state.member(for: id)
+        let candidates = state.withLock { state in
+            state.aliveCandidateSnapshot(excluding: excluding)
+        }
+        guard let id = candidates.randomElement() else { return nil }
+        return state.withLock { state in
+            state.aliveMember(for: id)
         }
     }
 
     /// Returns multiple random alive members, excluding specified IDs.
     public func randomAliveMembers(count: Int, excluding: Set<MemberID> = []) -> [Member] {
-        state.withLock { state in
-            var candidates = state.aliveCandidates(excluding: excluding)
-            guard !candidates.isEmpty else { return [] }
+        guard count > 0 else { return [] }
 
-            let selectCount = min(count, candidates.count)
-            var selected: [Member] = []
-            selected.reserveCapacity(selectCount)
+        var candidates = state.withLock { state in
+            state.aliveCandidateSnapshot(excluding: excluding)
+        }
+        guard !candidates.isEmpty else { return [] }
 
-            for _ in 0..<selectCount {
-                let index = Int.random(in: 0..<candidates.count)
-                let id = candidates.remove(at: index)
-                if let member = state.member(for: id) {
-                    selected.append(member)
-                }
-            }
+        let selectCount = min(count, candidates.count)
+        for offset in 0..<selectCount {
+            let index = Int.random(in: offset..<candidates.count)
+            candidates.swapAt(offset, index)
+        }
 
-            return selected
+        let selectedIDs = Array(candidates.prefix(selectCount))
+        return state.withLock { state in
+            state.aliveMembers(for: selectedIDs)
         }
     }
 
     /// Returns a random member from alive or suspect, excluding specified IDs.
     public func randomProbableTarget(excluding: Set<MemberID> = []) -> Member? {
-        state.withLock { state in
-            let candidates = state.probableCandidates(excluding: excluding)
-            guard let id = candidates.randomElement() else { return nil }
-            return state.member(for: id)
+        let candidates = state.withLock { state in
+            state.probableCandidateSnapshot(excluding: excluding)
+        }
+        guard let id = candidates.randomElement() else { return nil }
+        return state.withLock { state in
+            state.probableMember(for: id)
         }
     }
 
     /// Returns the next probe target using round-robin selection.
     public func nextRoundRobinTarget(excluding: Set<MemberID> = []) -> Member? {
-        state.withLock { state in
-            state.nextRoundRobinTarget(excluding: excluding)
+        let candidates = state.withLock { state in
+            state.probableCandidateSnapshot(excluding: excluding)
+        }
+        let sortedCandidates = MembershipState.sortedMemberIDs(candidates)
+        return state.withLock { state in
+            state.nextRoundRobinTarget(fromSortedCandidates: sortedCandidates)
         }
     }
 

@@ -106,12 +106,54 @@ public struct MembershipState: Sendable {
         Self.sortedMemberIDs(aliveMembers.subtracting(excluding))
     }
 
+    /// Returns the IDs of alive members without sorting.
+    ///
+    /// Facades use this as a short critical-section snapshot, then perform
+    /// randomization or sorting outside their lock.
+    public func aliveCandidateSnapshot(excluding: Set<MemberID>) -> [MemberID] {
+        Array(aliveMembers.subtracting(excluding))
+    }
+
     /// Returns the IDs of alive-or-suspect members, excluding `excluding`, in
     /// stable order. Used for failure-detection probing (both alive and suspect).
     public func probableCandidates(excluding: Set<MemberID>) -> [MemberID] {
         Self.sortedMemberIDs(
             aliveMembers.union(suspectMembers).subtracting(excluding)
         )
+    }
+
+    /// Returns the IDs of alive-or-suspect members without sorting.
+    ///
+    /// Facades use this as a short critical-section snapshot, then perform
+    /// randomization or sorting outside their lock.
+    public func probableCandidateSnapshot(excluding: Set<MemberID>) -> [MemberID] {
+        Array(aliveMembers.union(suspectMembers).subtracting(excluding))
+    }
+
+    /// Returns an alive member for a candidate ID if it is still alive.
+    public func aliveMember(for id: MemberID) -> Member? {
+        guard let member = members[id], member.status == .alive else {
+            return nil
+        }
+        return member
+    }
+
+    /// Returns alive members for candidate IDs that are still alive.
+    public func aliveMembers(for ids: [MemberID]) -> [Member] {
+        ids.compactMap { aliveMember(for: $0) }
+    }
+
+    /// Returns an alive-or-suspect member for a candidate ID if it is still probeable.
+    public func probableMember(for id: MemberID) -> Member? {
+        guard let member = members[id] else {
+            return nil
+        }
+        switch member.status {
+        case .alive, .suspect:
+            return member
+        case .dead:
+            return nil
+        }
     }
 
     /// Returns the next probe target using round-robin selection.
@@ -126,14 +168,31 @@ public struct MembershipState: Sendable {
         let candidates = Self.sortedMemberIDs(
             aliveMembers.union(suspectMembers).subtracting(excluding)
         )
+        return nextRoundRobinTarget(fromSortedCandidates: candidates)
+    }
+
+    /// Returns the next round-robin target from a stable, caller-sorted snapshot.
+    ///
+    /// The snapshot may be slightly stale if the caller sorted outside its lock,
+    /// so every candidate is revalidated against the current table before it is
+    /// returned.
+    public mutating func nextRoundRobinTarget(fromSortedCandidates candidates: [MemberID]) -> Member? {
         guard !candidates.isEmpty else { return nil }
 
         // Reset index if it exceeds array bounds.
         probeIndex = probeIndex % candidates.count
-        let id = candidates[probeIndex]
-        probeIndex += 1
 
-        return members[id]
+        for offset in 0..<candidates.count {
+            let index = (probeIndex + offset) % candidates.count
+            let id = candidates[index]
+            if let member = probableMember(for: id) {
+                probeIndex = index + 1
+                return member
+            }
+        }
+
+        probeIndex = 0
+        return nil
     }
 
     // MARK: - Garbage Collection
@@ -420,7 +479,7 @@ public struct MembershipState: Sendable {
         return update.status > existing.status
     }
 
-    private static func sortedMemberIDs<S: Sequence>(_ ids: S) -> [MemberID] where S.Element == MemberID {
+    public static func sortedMemberIDs<S: Sequence>(_ ids: S) -> [MemberID] where S.Element == MemberID {
         Array(ids).sorted { lhs, rhs in
             if lhs.id != rhs.id {
                 return lhs.id < rhs.id

@@ -27,8 +27,9 @@ import SWIMWire
 ///
 /// Conform to this protocol and inject an instance via
 /// ``SWIMConfiguration/authenticator`` to make the trust boundary explicit:
-/// - Outgoing messages are signed via ``sign(message:)``.
-/// - Incoming messages are verified via ``verify(message:)`` *before* their
+/// - Outgoing canonical authentication bytes are signed via ``sign(messageBytes:)``.
+/// - Incoming canonical authentication bytes and their transmitted token are verified
+///   via ``verify(messageBytes:token:)`` *before* their
 ///   gossip is trusted. Datagrams that fail verification are rejected and never
 ///   applied to the member list.
 ///
@@ -39,24 +40,28 @@ import SWIMWire
 /// ``SWIMConfiguration/maxMemberCount``) only.
 ///
 /// - Note: Implementations must be deterministic and side-effect free with
-///   respect to ``verify(message:)`` so the same datagram always yields the same
-///   decision.
+///   respect to ``verify(messageBytes:token:)`` so the same datagram always
+///   yields the same decision.
 public protocol SWIMMessageAuthenticator: Sendable {
-    /// Signs an outgoing message.
+    /// Signs an outgoing canonical authentication encoding.
     ///
-    /// The returned token is attached to the encoded datagram by the transport
-    /// integration layer. Implementations typically compute a MAC/signature over
-    /// the canonical encoding of `message`.
+    /// The returned token is attached to the encoded datagram's authenticated
+    /// envelope. The bytes include the claimed sender identity and the canonical
+    /// inner message, so a signed datagram cannot be replayed from another sender.
     ///
-    /// - Parameter message: The message about to be sent.
+    /// - Parameter messageBytes: The canonical encoding of the message about to
+    ///   be sent.
     /// - Returns: An authentication token to transmit alongside the message.
     /// - Throws: If signing fails (e.g. key material unavailable).
-    func sign(message: SWIMMessage) throws -> [UInt8]
+    func sign(messageBytes: [UInt8]) throws -> [UInt8]
 
-    /// Verifies an incoming message.
+    /// Verifies an incoming canonical authentication encoding and transmitted token.
     ///
-    /// - Parameter message: The decoded message whose authenticity is in question.
+    /// - Parameters:
+    ///   - messageBytes: The canonical authentication bytes containing the sender
+    ///     identity and decoded inner message.
+    ///   - token: The token transmitted in the authenticated envelope.
     /// - Returns: `true` if the message is authentic and may be trusted.
-    func verify(message: SWIMMessage) -> Bool
+    func verify(messageBytes: [UInt8], token: [UInt8]) -> Bool
 }
 #endif

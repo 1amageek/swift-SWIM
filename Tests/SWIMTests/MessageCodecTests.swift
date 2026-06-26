@@ -316,4 +316,39 @@ struct MessageCodecTests {
             _ = try SWIMMessageCodec.decode(data)
         }
     }
+
+    @Test("Encode and decode authenticated envelope")
+    func authenticatedEnvelopeRoundTrip() throws {
+        let inner = SWIMMessage.ping(sequenceNumber: 42, payload: .empty)
+        let sender = MemberID(id: "node-auth", address: "127.0.0.1:9000")
+        let original = SWIMMessage.authenticated(sender: sender, token: [0xA5, 0x01], message: inner)
+
+        let data = try SWIMMessageCodec.encode(original)
+        let decoded = try SWIMMessageCodec.decode(data)
+
+        if case .authenticated(let decodedSender, let token, let message) = decoded {
+            #expect(decodedSender == sender)
+            #expect(token == [0xA5, 0x01])
+            #expect(message == inner)
+        } else {
+            Issue.record("Expected authenticated envelope")
+        }
+    }
+
+    @Test("Encoding an over-long authentication token throws")
+    func authenticatedEnvelopeRejectsOversizedToken() {
+        let inner = SWIMMessage.ping(sequenceNumber: 1, payload: .empty)
+        let message = SWIMMessage.authenticated(
+            sender: MemberID(id: "node-auth", address: "127.0.0.1:9000"),
+            token: Array(repeating: 0xA5, count: Int(UInt16.max) + 1),
+            message: inner
+        )
+
+        do {
+            _ = try SWIMMessageCodec.encodeToBytes(message)
+            Issue.record("Expected oversized token to throw")
+        } catch {
+            #expect(error == .authenticationTokenTooLong(byteCount: Int(UInt16.max) + 1))
+        }
+    }
 }

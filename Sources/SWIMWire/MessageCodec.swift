@@ -14,6 +14,7 @@ public enum SWIMCodecError: Error, Sendable, Equatable {
     /// Surfaced instead of trapping so an over-long identifier/address cannot
     /// crash the encoder.
     case stringTooLong(byteCount: Int)
+    case authenticationTokenTooLong(byteCount: Int)
 }
 
 /// High-performance binary codec for SWIM messages.
@@ -32,6 +33,7 @@ public enum SWIMCodecError: Error, Sendable, Equatable {
 /// - 0x02: PingRequest (target + payload)
 /// - 0x03: Ack (target + payload)
 /// - 0x04: Nack (target)
+/// - 0x05: Authenticated envelope (token + sender + inner message)
 ///
 /// ### MemberID Format
 /// ```
@@ -118,6 +120,6 @@ public enum SWIMMessageCodec {
     /// out-of-range message-type byte is reported distinctly from truncation.
     @inlinable
     static func error(forTypeCode typeCode: UInt8) -> SWIMCodecError {
-        typeCode > 0x04 ? .invalidMessageType(typeCode) : .truncatedMessage
+        typeCode > 0x05 ? .invalidMessageType(typeCode) : .truncatedMessage
     }
 }

@@ -8,6 +8,7 @@
 import Foundation
 import Testing
 @testable import SWIM
+import SWIMWire
 
 @Suite("SWIM Trust Boundary Tests")
 struct SWIMTrustBoundaryTests {
@@ -15,8 +16,29 @@ struct SWIMTrustBoundaryTests {
     /// Authenticator that accepts or rejects every message based on a fixed flag.
     private struct FixedAuthenticator: SWIMMessageAuthenticator {
         let accept: Bool
-        func sign(message: SWIMMessage) throws -> [UInt8] { [] }
-        func verify(message: SWIMMessage) -> Bool { accept }
+        func sign(messageBytes: [UInt8]) throws -> [UInt8] {
+            accept ? [0xA5] + Array(messageBytes.prefix(4)) : [0x00]
+        }
+
+        func verify(messageBytes: [UInt8], token: [UInt8]) -> Bool {
+            accept && token == ([0xA5] + Array(messageBytes.prefix(4)))
+        }
+    }
+
+    private func authenticated(
+        _ message: SWIMMessage,
+        sender: MemberID,
+        using authenticator: some SWIMMessageAuthenticator
+    ) throws -> SWIMMessage {
+        let bytes = try authenticationBytes(sender: sender, message: message)
+        return .authenticated(sender: sender, token: try authenticator.sign(messageBytes: bytes), message: message)
+    }
+
+    private func authenticationBytes(sender: MemberID, message: SWIMMessage) throws -> [UInt8] {
+        var buffer = WriteBuffer(capacity: 256)
+        try sender.encode(to: &buffer)
+        buffer.writeBytes(try SWIMMessageCodec.encodeToBytes(message))
+        return buffer.toBytes()
     }
 
     private func collectError<Transport: SWIMTransport, Clock: SWIMClock>(
@@ -95,7 +117,7 @@ struct SWIMTrustBoundaryTests {
         await instance.start()
 
         let errorTask = collectError(from: instance) { error in
-            if case .protocolError(let msg) = error { return msg.contains("unverifiable") }
+            if case .protocolError(let msg) = error { return msg.contains("unauthenticated") }
             return false
         }
 
@@ -120,24 +142,55 @@ struct SWIMTrustBoundaryTests {
     @Test("With an accepting authenticator, a verifiable datagram is processed", .timeLimit(.minutes(1)))
     func verifiableDatagramAccepted() async throws {
         var config = SWIMConfiguration.development
-        config.authenticator = FixedAuthenticator(accept: true)
+        let authenticator = FixedAuthenticator(accept: true)
+        config.authenticator = authenticator
         let transport = MockTransport(localAddress: "127.0.0.1:8000")
         let localID = MemberID(id: "node1", address: "127.0.0.1:8000")
         let instance = SWIMCluster(localMember: Member(id: localID), config: config, transport: transport)
         await instance.start()
 
         let peerID = MemberID(id: "node2", address: "127.0.0.1:8001")
-        transport.receive(
-            .ping(sequenceNumber: 1, payload: GossipPayload(updates: [
+        let message = SWIMMessage.ping(sequenceNumber: 1, payload: GossipPayload(updates: [
                 MembershipUpdate(member: Member(id: peerID, incarnation: Incarnation(value: 1)))
-            ])),
-            from: peerID
-        )
+        ]))
+        transport.receive(try authenticated(message, sender: peerID, using: authenticator), from: peerID)
         try await Task.sleep(for: .milliseconds(50))
 
         #expect(await instance.members.contains { $0.id == peerID }, "Verified gossip must be applied")
 
         try await instance.shutdown()
+    }
+
+    @Test("Authenticated datagram replayed from a different sender is rejected", .timeLimit(.minutes(1)))
+    func authenticatedDatagramSenderMismatchRejected() async throws {
+        var config = SWIMConfiguration.development
+        let authenticator = FixedAuthenticator(accept: true)
+        config.authenticator = authenticator
+        let transport = MockTransport(localAddress: "127.0.0.1:8000")
+        let localID = MemberID(id: "node1", address: "127.0.0.1:8000")
+        let instance = SWIMCluster(localMember: Member(id: localID), config: config, transport: transport)
+        await instance.start()
+
+        let errorTask = collectError(from: instance) { error in
+            if case .protocolError(let msg) = error { return msg.contains("sender-mismatched") }
+            return false
+        }
+
+        let signedPeerID = MemberID(id: "node2", address: "127.0.0.1:8001")
+        let replaySenderID = MemberID(id: "attacker", address: "127.0.0.1:8999")
+        let message = SWIMMessage.ping(sequenceNumber: 1, payload: GossipPayload(updates: [
+            MembershipUpdate(member: Member(id: signedPeerID, incarnation: Incarnation(value: 1)))
+        ]))
+        transport.receive(
+            try authenticated(message, sender: signedPeerID, using: authenticator),
+            from: replaySenderID
+        )
+        try await Task.sleep(for: .milliseconds(50))
+
+        #expect(!((await instance.members).contains { $0.id == signedPeerID }), "Sender-mismatched verified bytes must not be applied")
+
+        try await instance.shutdown()
+        #expect(await errorTask.value, "Sender mismatch must be surfaced")
     }
 
     // MARK: - Member-table cap at the instance level (finding #7)

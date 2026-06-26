@@ -397,7 +397,7 @@ struct SWIMProtocolFlowTests {
         let sentMessages = transport.getSentMessages()
 
         let ackWithGossip = sentMessages.first { msg, dest in
-            if case .ack(_, _, let payload) = msg, dest == member3.id {
+            if case .ack(_, _, _) = msg, dest == member3.id {
                 return true
             }
             return false

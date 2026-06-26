@@ -32,6 +32,10 @@ public enum SWIMMessage: Sendable, Hashable {
     /// Can be used to explicitly indicate a probe failure.
     case nack(sequenceNumber: UInt64, target: MemberID)
 
+    /// Authenticated envelope binding the token to the transport sender and
+    /// canonical inner message.
+    indirect case authenticated(sender: MemberID, token: [UInt8], message: SWIMMessage)
+
     /// The sequence number of this message.
     @inlinable
     public var sequenceNumber: UInt64 {
@@ -40,6 +44,7 @@ public enum SWIMMessage: Sendable, Hashable {
         case .pingRequest(let seq, _, _): return seq
         case .ack(let seq, _, _): return seq
         case .nack(let seq, _): return seq
+        case .authenticated(_, _, let message): return message.sequenceNumber
         }
     }
 
@@ -51,6 +56,7 @@ public enum SWIMMessage: Sendable, Hashable {
         case .pingRequest(_, _, let payload): return payload
         case .ack(_, _, let payload): return payload
         case .nack: return nil
+        case .authenticated(_, _, let message): return message.payload
         }
     }
 
@@ -62,6 +68,7 @@ public enum SWIMMessage: Sendable, Hashable {
         case .pingRequest: return 0x02
         case .ack: return 0x03
         case .nack: return 0x04
+        case .authenticated: return 0x05
         }
     }
 
@@ -91,6 +98,15 @@ public enum SWIMMessage: Sendable, Hashable {
 
         case .nack(_, let target):
             try target.encode(to: &buffer)
+
+        case .authenticated(let sender, let token, let message):
+            guard token.count <= Int(UInt16.max) else {
+                throw SWIMCodecError.authenticationTokenTooLong(byteCount: token.count)
+            }
+            buffer.writeUInt16(UInt16(token.count))
+            buffer.writeBytes(token)
+            try sender.encode(to: &buffer)
+            try message.encode(to: &buffer)
         }
     }
 
@@ -140,6 +156,21 @@ public enum SWIMMessage: Sendable, Hashable {
             }
             return .nack(sequenceNumber: sequenceNumber, target: target)
 
+        case 0x05: // Authenticated envelope
+            guard buffer.hasBytes(2, at: offset) else { return nil }
+            let tokenLength = Int(buffer.readUInt16(at: offset))
+            offset += 2
+            guard let tokenBytes = buffer.bytes(at: offset, count: tokenLength) else {
+                return nil
+            }
+            let token = Array(tokenBytes)
+            offset += tokenLength
+            guard let sender = MemberID.decode(from: buffer, at: &offset) else { return nil }
+            guard buffer.hasBytes(9, at: offset) else { return nil }
+            let inner = ReadBuffer(base: buffer.base + offset, count: buffer.count - offset)
+            guard let message = SWIMMessage.decode(from: inner) else { return nil }
+            return .authenticated(sender: sender, token: token, message: message)
+
         default:
             return nil
         }
@@ -157,6 +188,8 @@ extension SWIMMessage: CustomStringConvertible {
             return "Ack(seq=\(seq), target=\(target.id), \(payload.count) updates)"
         case .nack(let seq, let target):
             return "Nack(seq=\(seq), target=\(target.id))"
+        case .authenticated(let sender, let token, let message):
+            return "Authenticated(sender=\(sender.id), tokenBytes=\(token.count), message=\(message))"
         }
     }
 }

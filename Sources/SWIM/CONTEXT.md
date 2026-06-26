@@ -96,13 +96,17 @@ format, usage); this file is the contract.
   `incomingMessages` + `localAddress`); `Mock` / `Loopback` test transports and
   `SWIMUDPTransport` implement it.
 - `SWIMMessageAuthenticator` is the optional injected sign / verify hook; when set,
-  outgoing messages are signed and incoming messages verified before gossip is trusted.
+  outgoing canonical authentication bytes (`sender MemberID` + canonical inner
+  message) are signed, carried in an authenticated envelope, and incoming sender +
+  canonical bytes + token are verified before gossip is trusted. The envelope sender
+  must match the transport sender.
 
 ## Wire protocol notes
 
 - Message framing: type (1B) + sequence number (8B) + type-specific payload. Type
-  codes: `0x01` Ping, `0x02` PingRequest, `0x03` Ack, `0x04` Nack; a type code
-  `> 0x04` throws `SWIMCodecError.invalidMessageType`.
+  codes: `0x01` Ping, `0x02` PingRequest, `0x03` Ack, `0x04` Nack, `0x05`
+  authenticated envelope (`token length + token + sender MemberID + inner message`);
+  a type code `> 0x05` throws `SWIMCodecError.invalidMessageType`.
 - `SWIMMessageCodec` decode enforces a message-size ceiling
   (`SWIMCodecError.messageTooLarge`) and rejects truncated input
   (`SWIMCodecError.truncatedMessage`); encode throws (`.stringTooLong`) rather than

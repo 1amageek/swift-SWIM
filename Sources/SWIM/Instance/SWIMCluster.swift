@@ -228,7 +228,7 @@ public actor SWIMCluster<Transport: SWIMTransport, Clock: SWIMClock> {
             let ping = SWIMMessage.ping(sequenceNumber: 0, payload: payload)
 
             do {
-                try await transport.send(ping, to: seed)
+                try await send(ping, to: seed)
                 joinedAny = true
             } catch {
                 // Aggregate the failure and try the next seed.
@@ -278,7 +278,7 @@ public actor SWIMCluster<Transport: SWIMTransport, Clock: SWIMClock> {
         var sendErrorDetails: [String] = []
         for target in targets {
             do {
-                try await transport.send(ping, to: target.id)
+                try await send(ping, to: target.id)
             } catch {
                 sendErrorDetails.append("\(target.id.address): \(error)")
                 continue
@@ -403,7 +403,7 @@ public actor SWIMCluster<Transport: SWIMTransport, Clock: SWIMClock> {
 
         // Send direct ping
         do {
-            try await transport.send(ping, to: target.id)
+            try await send(ping, to: target.id)
         } catch {
             // Local send failed: clean up and report timeout (failure), never a
             // silent success.
@@ -517,7 +517,7 @@ public actor SWIMCluster<Transport: SWIMTransport, Clock: SWIMClock> {
             )
 
             do {
-                try await transport.send(pingReq, to: prober.id)
+                try await send(pingReq, to: prober.id)
                 dispatchedProbeCount += 1
             } catch {
                 continue
@@ -631,23 +631,25 @@ public actor SWIMCluster<Transport: SWIMTransport, Clock: SWIMClock> {
         }
     }
 
-    private func handleMessage(_ message: SWIMMessage, from sender: MemberID) async {
-        // Trust boundary: when an authenticator is configured, reject any message
-        // that fails verification before its gossip is trusted or it is acted
-        // upon. Without an authenticator, this falls through to the traditional
-        // unauthenticated mode (protected only by the gossip sanity bounds).
-        //
-        // HOST-ONLY: the pluggable authenticator is an `any` existential, gated out
-        // of the Embedded build (see `SWIMConfiguration.authenticator`). The
-        // Embedded build always runs unauthenticated (sanity bounds only).
+    private func send(_ message: SWIMMessage, to member: MemberID) async throws {
+        try await transport.send(try authenticatedOutboundMessage(message), to: member)
+    }
+
+    private func authenticatedOutboundMessage(_ message: SWIMMessage) throws -> SWIMMessage {
         #if !hasFeature(Embedded)
-        if let authenticator = config.authenticator, !authenticator.verify(message: message) {
-            eventContinuation.yield(.error(.protocolError(
-                "Rejected unverifiable message from \(sender)"
-            )))
-            return
+        guard let authenticator = config.authenticator else {
+            return message
         }
+        let messageBytes = try authenticationBytes(sender: localMember.id, message: message)
+        let token = try authenticator.sign(messageBytes: messageBytes)
+        return .authenticated(sender: localMember.id, token: token, message: message)
+        #else
+        return message
         #endif
+    }
+
+    private func handleMessage(_ message: SWIMMessage, from sender: MemberID) async {
+        guard let message = verifiedInboundMessage(message, from: sender) else { return }
 
         // Process gossip payload first
         if let payload = message.payload {
@@ -667,7 +669,72 @@ public actor SWIMCluster<Transport: SWIMTransport, Clock: SWIMClock> {
         case .nack:
             // Ignore nacks for now
             break
+
+        case .authenticated:
+            // verifiedInboundMessage unwraps authenticated envelopes before dispatch.
+            break
         }
+    }
+
+    private func verifiedInboundMessage(_ message: SWIMMessage, from sender: MemberID) -> SWIMMessage? {
+        #if !hasFeature(Embedded)
+        guard let authenticator = config.authenticator else {
+            if case .authenticated = message {
+                eventContinuation.yield(.error(.protocolError(
+                    "Rejected authenticated envelope from \(sender) without a configured authenticator"
+                )))
+                return nil
+            }
+            return message
+        }
+
+        guard case .authenticated(let claimedSender, let token, let inner) = message else {
+            eventContinuation.yield(.error(.protocolError(
+                "Rejected unauthenticated message from \(sender)"
+            )))
+            return nil
+        }
+
+        guard claimedSender == sender else {
+            eventContinuation.yield(.error(.protocolError(
+                "Rejected sender-mismatched authenticated message from \(sender)"
+            )))
+            return nil
+        }
+
+        let messageBytes: [UInt8]
+        do {
+            messageBytes = try authenticationBytes(sender: claimedSender, message: inner)
+        } catch {
+            eventContinuation.yield(.error(.protocolError(
+                "Rejected malformed authenticated message from \(sender): \(error)"
+            )))
+            return nil
+        }
+
+        guard authenticator.verify(messageBytes: messageBytes, token: token) else {
+            eventContinuation.yield(.error(.protocolError(
+                "Rejected unverifiable message from \(sender)"
+            )))
+            return nil
+        }
+        return inner
+        #else
+        if case .authenticated = message {
+            eventContinuation.yield(.error(.protocolError(
+                "Rejected authenticated envelope from \(sender) in an unauthenticated Embedded build"
+            )))
+            return nil
+        }
+        return message
+        #endif
+    }
+
+    private func authenticationBytes(sender: MemberID, message: SWIMMessage) throws -> [UInt8] {
+        var buffer = WriteBuffer(capacity: 256)
+        try sender.encode(to: &buffer)
+        buffer.writeBytes(try SWIMMessageCodec.encodeToBytes(message))
+        return buffer.toBytes()
     }
 
     private func handlePing(sequenceNumber: UInt64, from sender: MemberID) async {
@@ -707,7 +774,7 @@ public actor SWIMCluster<Transport: SWIMTransport, Clock: SWIMClock> {
         )
 
         do {
-            try await transport.send(ack, to: sender)
+            try await send(ack, to: sender)
         } catch {
             return
         }
@@ -733,13 +800,13 @@ public actor SWIMCluster<Transport: SWIMTransport, Clock: SWIMClock> {
         let ping = SWIMMessage.ping(sequenceNumber: probeSeq, payload: payload)
 
         do {
-            try await transport.send(ping, to: target)
+            try await send(ping, to: target)
         } catch {
             // Failed to send, send nack immediately
             pendingProbes.removeValue(forKey: probeSeq)
             let nack = SWIMMessage.nack(sequenceNumber: sequenceNumber, target: target)
             do {
-                try await transport.send(nack, to: sender)
+                try await send(nack, to: sender)
             } catch {
                 return
             }
@@ -808,7 +875,7 @@ public actor SWIMCluster<Transport: SWIMTransport, Clock: SWIMClock> {
                 payload: ackPayload
             )
             do {
-                try await transport.send(ack, to: requester)
+                try await send(ack, to: requester)
             } catch {
                 return
             }
@@ -816,7 +883,7 @@ public actor SWIMCluster<Transport: SWIMTransport, Clock: SWIMClock> {
             // Target didn't respond, send nack
             let nack = SWIMMessage.nack(sequenceNumber: originalSeq, target: target)
             do {
-                try await transport.send(nack, to: requester)
+                try await send(nack, to: requester)
             } catch {
                 return
             }
