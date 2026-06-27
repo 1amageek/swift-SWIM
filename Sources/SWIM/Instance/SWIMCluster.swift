@@ -170,7 +170,7 @@ public actor SWIMCluster<Transport: SWIMTransport, Clock: SWIMClock> {
     /// Shuts down the SWIM protocol.
     ///
     /// This cancels the protocol loop and cleans up resources.
-    public func shutdown() async throws {
+    public func shutdown() async throws(SWIMError) {
         isRunning = false
         protocolTask?.cancel()
         receiveTask?.cancel()
@@ -201,7 +201,7 @@ public actor SWIMCluster<Transport: SWIMTransport, Clock: SWIMClock> {
     ///
     /// - Parameter seeds: List of seed member IDs to contact
     /// - Throws: `SWIMError.joinFailed` if no seeds respond
-    public func join(seeds: [MemberID]) async throws {
+    public func join(seeds: [MemberID]) async throws(SWIMError) {
         guard !seeds.isEmpty else {
             throw SWIMError.joinFailed(reason: "No seed members provided")
         }
@@ -232,7 +232,7 @@ public actor SWIMCluster<Transport: SWIMTransport, Clock: SWIMClock> {
                 joinedAny = true
             } catch {
                 // Aggregate the failure and try the next seed.
-                sendErrorDetails.append("\(seed.address): \(error)")
+                sendErrorDetails.append("\(seed.address): \(error.description)")
                 continue
             }
         }
@@ -257,7 +257,7 @@ public actor SWIMCluster<Transport: SWIMTransport, Clock: SWIMClock> {
     /// Leaves the cluster gracefully.
     ///
     /// Broadcasts a dead status for ourselves before stopping.
-    public func leave() async throws {
+    public func leave() async throws(SWIMError) {
         // Mark ourselves as dead
         localMember.status = .dead
 
@@ -280,7 +280,7 @@ public actor SWIMCluster<Transport: SWIMTransport, Clock: SWIMClock> {
             do {
                 try await send(ping, to: target.id)
             } catch {
-                sendErrorDetails.append("\(target.id.address): \(error)")
+                sendErrorDetails.append("\(target.id.address): \(error.description)")
                 continue
             }
         }
@@ -456,7 +456,7 @@ public actor SWIMCluster<Transport: SWIMTransport, Clock: SWIMClock> {
                     // Cancelled (ack arrived first): the ack path already resumed.
                     return
                 }
-                await self.resolveProbe(sequenceNumber: sequenceNumber, result: .timeout)
+                self.resolveProbe(sequenceNumber: sequenceNumber, result: .timeout)
             }
             #else
             pending.timeoutTask = Task { [weak self] in
@@ -631,17 +631,42 @@ public actor SWIMCluster<Transport: SWIMTransport, Clock: SWIMClock> {
         }
     }
 
-    private func send(_ message: SWIMMessage, to member: MemberID) async throws {
-        try await transport.send(try authenticatedOutboundMessage(message), to: member)
+    private func send(_ message: SWIMMessage, to member: MemberID) async throws(SWIMError) {
+        let outbound = try authenticatedOutboundMessage(message)
+        #if hasFeature(Embedded)
+        do {
+            try await transport.send(outbound, to: member)
+        } catch {
+            throw .transportError(error.description)
+        }
+        #else
+        do {
+            try await transport.send(outbound, to: member)
+        } catch let error as SWIMError {
+            throw error
+        } catch {
+            throw .transportError("\(error)")
+        }
+        #endif
     }
 
-    private func authenticatedOutboundMessage(_ message: SWIMMessage) throws -> SWIMMessage {
+    private func authenticatedOutboundMessage(_ message: SWIMMessage) throws(SWIMError) -> SWIMMessage {
         #if !hasFeature(Embedded)
         guard let authenticator = config.authenticator else {
             return message
         }
-        let messageBytes = try authenticationBytes(sender: localMember.id, message: message)
-        let token = try authenticator.sign(messageBytes: messageBytes)
+        let messageBytes: [UInt8]
+        do {
+            messageBytes = try authenticationBytes(sender: localMember.id, message: message)
+        } catch {
+            throw .protocolError("Authentication encoding failed: \(error)")
+        }
+        let token: [UInt8]
+        do {
+            token = try authenticator.sign(messageBytes: messageBytes)
+        } catch {
+            throw .protocolError("Authentication signing failed: \(error)")
+        }
         return .authenticated(sender: localMember.id, token: token, message: message)
         #else
         return message
@@ -730,7 +755,7 @@ public actor SWIMCluster<Transport: SWIMTransport, Clock: SWIMClock> {
         #endif
     }
 
-    private func authenticationBytes(sender: MemberID, message: SWIMMessage) throws -> [UInt8] {
+    private func authenticationBytes(sender: MemberID, message: SWIMMessage) throws(SWIMCodecError) -> [UInt8] {
         var buffer = WriteBuffer(capacity: 256)
         try sender.encode(to: &buffer)
         buffer.writeBytes(try SWIMMessageCodec.encodeToBytes(message))
