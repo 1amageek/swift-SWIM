@@ -48,7 +48,7 @@ let package = Package(
         ),
     ],
     dependencies: [
-        .package(url: "https://github.com/1amageek/swift-nio-udp.git", from: "1.1.3"),
+        .package(url: "https://github.com/1amageek/swift-nio-udp.git", from: "1.1.4"),
     ],
     targets: [
         // Tier-3 codec core (renamed from SWIMCore). Embedded-clean SWIM gossip

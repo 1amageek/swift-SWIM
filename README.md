@@ -6,9 +6,7 @@ detection for large-scale distributed systems. Embedded-first: the gossip codec 
 the value-type membership state machine are Foundation-free, and the byte currency
 is `[UInt8]`.
 
-> **Release status.** The released `1.2.0` ships the prior API. The Embedded-first
-> API documented here lives on the unreleased `embedded` branch (M8 pending) and is
-> not tagged — pin to the branch to use it.
+> **Release status.** Current release: `1.2.4`.
 
 ## Features
 
@@ -27,12 +25,11 @@ is `[UInt8]`.
 
 ## Installation
 
-Add swift-SWIM to your `Package.swift`. While the Embedded API is on the unreleased
-`embedded` branch, depend on the branch:
+Add swift-SWIM to your `Package.swift`:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/1amageek/swift-SWIM.git", branch: "embedded")
+    .package(url: "https://github.com/1amageek/swift-SWIM.git", from: "1.2.4")
 ]
 ```
 
